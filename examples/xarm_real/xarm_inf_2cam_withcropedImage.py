@@ -5,9 +5,24 @@ import jax
 from xarm.wrapper import XArmAPI
 
 # OpenPI 依赖
+import sys
+import os
+# 确保包含 openpi 文件夹的上一层目录 (src) 在路径中
+# 获取当前脚本所在目录的上级目录（/home/openpi/examples）
+current_dir = os.path.dirname(os.path.abspath(__file__))
+# 拼接得到 openpi-client 的绝对路径（/home/openpi/packages/openpi-client）
+openpi_client_path = os.path.join(current_dir, "../../packages/openpi-client/src")
+
+# 确保包含 openpi 文件夹的上一层目录 (src) 在路径中
+sys.path.append("/home/openpi/src")
+# 新增：添加 openpi-client 所在目录到路径
+sys.path.append(os.path.abspath(openpi_client_path))
+
+# 现在可以正常导入
 from openpi.training import config as _config
 from openpi.policies import policy_config
-from openpi_client import image_tools 
+from openpi_client import image_tools
+
 
 # -----------------------------------------------------------------------------
 # 1. 配置区域
@@ -16,8 +31,8 @@ ROBOT_IP = "192.168.1.232"
 CONFIG_NAME = "pi05_xarm_1212_night" 
 # 请确认这是你最新的、用【弧度】数据训练的 checkpoint
 # CHECKPOINT_DIR = "/home/hil-serl/openpi_test/openpi/checkpoints/1207night/19999" 
-CHECKPOINT_DIR = "/home/hil-serl/openpi_test/openpi/checkpoints/pi05_xarm_1222_weekend_2cam4090/142000" 
-
+# CHECKPOINT_DIR = "/home/openpi/checkpoints/1222_night/10hz/8000"     #实验三
+CHECKPOINT_DIR = "/home/openpi/checkpoints/1223/exp5/16000"          #实验四
 CAMERAS = {
     # "cam_high": 4,
     "cam_left_wrist": 0,
@@ -46,6 +61,7 @@ JOINT_LIMITS = [
 # 这里的 Z 给高一点 (200)，防止回 Home 时撞到东西
 # HOME_POS = [616.942688, -181.296143, 56.682617, -3.125365, 0.002198, 0.98222]
 HOME_POS = [539.120605, 17.047951, 100-59.568863, 3.12897, 0.012689, -1.01436]
+MIN_SAFE_Z = -69
 # -----------------------------------------------------------------------------
 # 2. 硬件封装类
 # -----------------------------------------------------------------------------
@@ -111,7 +127,10 @@ class XArmHardware:
             # frame = image_tools.resize_with_pad(frame, 224, 224)
             obs[name] = image_tools.convert_to_uint8(frame)
             print(f"[{name}] 图片尺寸: {frame.shape}")
-    
+        # 手动构造全黑的 cam_high
+        dummy_high = np.zeros((224, 224, 3), dtype=np.uint8) 
+        obs["cam_high"] = dummy_high
+
         # 1. 获取物理角度 (弧度)
         code, joints_rad = self.arm.get_servo_angle(is_radian=True)
         if code != 0: 
@@ -165,6 +184,38 @@ class XArmHardware:
             clipped = np.clip(angle, low, high)
             safe_joints.append(clipped)
         
+        # -------------------------------------------------------
+        # Z轴安全检查逻辑
+        # -------------------------------------------------------
+        # 1. 计算正运动学 (FK)，获取预测的 Cartesian 坐标
+        # input_is_radian=True, return_is_radian=True
+        # ret, pose = self.arm.get_forward_kinematics(angles=safe_joints, input_is_radian=True, return_is_radian=True)
+        
+        # if ret == 0:
+        #     pred_x, pred_y, pred_z, pred_roll, pred_pitch, pred_yaw = pose
+            
+        #     # 2. 检查 Z 轴是否低于限制
+        #     if pred_z < MIN_SAFE_Z:
+        #         # print(f"[Safety] Z轴过低 ({pred_z:.1f} < {MIN_SAFE_Z})! 正在修正...")
+                
+        #         # 3. 构造修正后的目标位姿 (Clamped Pose)
+        #         # 保持 X, Y, Roll, Pitch, Yaw 不变，强行把 Z 拉回到安全高度
+        #         safe_pose = [pred_x, pred_y, MIN_SAFE_Z, pred_roll, pred_pitch, pred_yaw]
+                
+        #         # 4. 逆运动学 (IK) 解算回关节角度
+        #         ret_ik, ik_joints = self.arm.get_inverse_kinematics(safe_pose, input_is_radian=True, return_is_radian=True)
+                
+        #         if ret_ik == 0:
+        #             # 如果 IK 解算成功，用修正后的关节角度覆盖
+        #             safe_joints = ik_joints
+        #         else:
+        #             print("[Safety Error] IK解算失败，无法修正Z轴。跳过此步运动。")
+        #             return # 直接跳过这次指令，防止碰撞
+        # else:
+        #     # 如果算不出 FK (通常不会发生)，为安全起见可以选择跳过
+        #     pass 
+        # -------------------------------------------------------
+
         full_joints = np.append(safe_joints, 0.0)
 
         # 2. 发送伺服指令 (弧度)

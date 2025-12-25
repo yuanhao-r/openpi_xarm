@@ -27,17 +27,19 @@ class XArmInputs(transforms.DataTransformFn):
         
         # 2. 处理图像
         # 对应你在 RepackTransform 中定义的键名
-        img_high = _parse_image(data["cam_high"])
+        # img_high = _parse_image(data["cam_high"])
         img_left = _parse_image(data["cam_left_wrist"])
         img_right = _parse_image(data["cam_right_wrist"])
 
+        img_base_dummy = np.zeros_like(img_left)
+        
         # 3. 构建输入字典
         inputs = {
             "state": state,
             "image": {
                 # 映射逻辑：
                 # cam_high -> base_0_rgb (第三人称主视角)
-                "base_0_rgb": img_high,
+                "base_0_rgb": img_base_dummy,
                 # cam_left_wrist -> left_wrist_0_rgb (左腕)
                 "left_wrist_0_rgb": img_left,
                 # cam_right_wrist -> right_wrist_0_rgb (右腕)
@@ -45,7 +47,7 @@ class XArmInputs(transforms.DataTransformFn):
             },
             # 告诉模型这三个摄像头的数据都是有效的
             "image_mask": {
-                "base_0_rgb": np.True_,
+                "base_0_rgb": np.bool_(False), 
                 "left_wrist_0_rgb": np.True_,
                 "right_wrist_0_rgb": np.True_,
             },
