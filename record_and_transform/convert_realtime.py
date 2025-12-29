@@ -447,13 +447,13 @@ def verify_converted_data(output_dir, repo_id):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--raw-dir", type=str, 
-                        default="/home/openpi/data/data_raw/exp8_data_auto_queue_PutAndRecord_1224/raw", 
+                        default="/home/openpi/data/data_raw/exp9_data_auto_queue_PutAndRecord_1224/raw", 
                         help="原始数据目录")
     parser.add_argument("--repo-id", type=str, 
                         default="xarm_autoPut_pi05_dataset", 
                         help="数据集名称")
     parser.add_argument("--output-dir", type=str, 
-                        default="/home/openpi/data/data_converted/exp8_lerobot_autoPut_data_1223morning_224_224", 
+                        default="/home/openpi/data/data_converted/exp9_lerobot_autoPut_data_1225afternoon_224_224", 
                         help="输出目录")
     parser.add_argument("--scan-interval", type=int, default=5, 
                         help="扫描新增episode的间隔（秒）")

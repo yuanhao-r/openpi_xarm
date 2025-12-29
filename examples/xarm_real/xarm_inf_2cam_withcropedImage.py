@@ -32,7 +32,7 @@ CONFIG_NAME = "pi05_xarm_1212_night"
 # 请确认这是你最新的、用【弧度】数据训练的 checkpoint
 # CHECKPOINT_DIR = "/home/hil-serl/openpi_test/openpi/checkpoints/1207night/19999" 
 # CHECKPOINT_DIR = "/home/openpi/checkpoints/1222_night/10hz/8000"     #实验三
-CHECKPOINT_DIR = "/home/openpi/checkpoints/1223/exp5/16000"          #实验四
+CHECKPOINT_DIR = "/home/openpi/checkpoints/exp9/30000"          #实验四
 CAMERAS = {
     # "cam_high": 4,
     "cam_left_wrist": 0,
@@ -45,7 +45,7 @@ CROP_CONFIGS = {
 }
 
 CONTROL_FREQ = 10 # 10Hz
-EXECUTE_STEPS = 4 # 每次推理执行多少步 (Chunk execution)
+EXECUTE_STEPS = 1 # 每次推理执行多少步 (Chunk execution)
 
 # 关节限位 (Rad) - 用于安全限幅
 JOINT_LIMITS = [
@@ -62,6 +62,13 @@ JOINT_LIMITS = [
 # HOME_POS = [616.942688, -181.296143, 56.682617, -3.125365, 0.002198, 0.98222]
 HOME_POS = [539.120605, 17.047951, 100-59.568863, 3.12897, 0.012689, -1.01436]
 MIN_SAFE_Z = -69
+# 减速因子：1.0 为原速，2.0 为 2倍慢，3.0 为 3倍慢。
+# 建议从 2.0 或 3.0 开始尝试，直到你觉得速度合适。
+SLOW_DOWN_FACTOR = 3.0  
+
+# 插值频率 (Hz)：发送给机械臂指令的频率，越高越丝滑，建议 100Hz 或 50Hz
+INTERPOLATION_FREQ = 100.0 
+
 # -----------------------------------------------------------------------------
 # 2. 硬件封装类
 # -----------------------------------------------------------------------------
@@ -170,60 +177,145 @@ class XArmHardware:
         self.arm.set_state(0)
         time.sleep(0.5)
 
+    # def execute_action(self, action_rad):
+    #     """
+    #     执行单步动作 (输入是弧度)
+    #     """
+    #     target_joints_rad = action_rad[:6]
+    #     target_gripper = action_rad[6]
+
+    #     # 1. 安全限位
+    #     safe_joints = []
+    #     for i, angle in enumerate(target_joints_rad):
+    #         low, high = JOINT_LIMITS[i]
+    #         clipped = np.clip(angle, low, high)
+    #         safe_joints.append(clipped)
+        
+    #     # -------------------------------------------------------
+    #     # Z轴安全检查逻辑
+    #     # -------------------------------------------------------
+    #     # 1. 计算正运动学 (FK)，获取预测的 Cartesian 坐标
+    #     # input_is_radian=True, return_is_radian=True
+    #     # ret, pose = self.arm.get_forward_kinematics(angles=safe_joints, input_is_radian=True, return_is_radian=True)
+        
+    #     # if ret == 0:
+    #     #     pred_x, pred_y, pred_z, pred_roll, pred_pitch, pred_yaw = pose
+            
+    #     #     # 2. 检查 Z 轴是否低于限制
+    #     #     if pred_z < MIN_SAFE_Z:
+    #     #         # print(f"[Safety] Z轴过低 ({pred_z:.1f} < {MIN_SAFE_Z})! 正在修正...")
+                
+    #     #         # 3. 构造修正后的目标位姿 (Clamped Pose)
+    #     #         # 保持 X, Y, Roll, Pitch, Yaw 不变，强行把 Z 拉回到安全高度
+    #     #         safe_pose = [pred_x, pred_y, MIN_SAFE_Z, pred_roll, pred_pitch, pred_yaw]
+                
+    #     #         # 4. 逆运动学 (IK) 解算回关节角度
+    #     #         ret_ik, ik_joints = self.arm.get_inverse_kinematics(safe_pose, input_is_radian=True, return_is_radian=True)
+                
+    #     #         if ret_ik == 0:
+    #     #             # 如果 IK 解算成功，用修正后的关节角度覆盖
+    #     #             safe_joints = ik_joints
+    #     #         else:
+    #     #             print("[Safety Error] IK解算失败，无法修正Z轴。跳过此步运动。")
+    #     #             return # 直接跳过这次指令，防止碰撞
+    #     # else:
+    #     #     # 如果算不出 FK (通常不会发生)，为安全起见可以选择跳过
+    #     #     pass 
+    #     # -------------------------------------------------------
+
+    #     full_joints = np.append(safe_joints, 0.0)
+
+    #     # 2. 发送伺服指令 (弧度)
+    #     ret = self.arm.set_servo_angle_j(angles=full_joints, is_radian=True)
+    #     if ret != 0:
+    #         print(f"[Error] Servo failed: {ret}")
+
+    #     # 3. 夹爪逻辑
+    #     if target_gripper > 0.8:
+    #         self.close_gripper()
+    #     elif target_gripper < 0.2:
+    #         self.open_gripper()
     def execute_action(self, action_rad):
         """
-        执行单步动作 (输入是弧度)
+        执行单步动作，包含 Z轴限位 + 平滑减速插值
         """
         target_joints_rad = action_rad[:6]
         target_gripper = action_rad[6]
 
-        # 1. 安全限位
+        # 1. 关节角度物理限位
         safe_joints = []
         for i, angle in enumerate(target_joints_rad):
             low, high = JOINT_LIMITS[i]
             clipped = np.clip(angle, low, high)
             safe_joints.append(clipped)
-        
+
         # -------------------------------------------------------
-        # Z轴安全检查逻辑
+        # Z轴安全检查逻辑 (正运动学 FK + 逆运动学 IK)
         # -------------------------------------------------------
-        # 1. 计算正运动学 (FK)，获取预测的 Cartesian 坐标
-        # input_is_radian=True, return_is_radian=True
-        # ret, pose = self.arm.get_forward_kinematics(angles=safe_joints, input_is_radian=True, return_is_radian=True)
+        # 计算目标姿态
+        ret, pose = self.arm.get_forward_kinematics(angles=safe_joints, input_is_radian=True, return_is_radian=True)
         
-        # if ret == 0:
-        #     pred_x, pred_y, pred_z, pred_roll, pred_pitch, pred_yaw = pose
+        if ret == 0:
+            pred_x, pred_y, pred_z, pred_roll, pred_pitch, pred_yaw = pose
             
-        #     # 2. 检查 Z 轴是否低于限制
-        #     if pred_z < MIN_SAFE_Z:
-        #         # print(f"[Safety] Z轴过低 ({pred_z:.1f} < {MIN_SAFE_Z})! 正在修正...")
+            # 如果预测高度低于安全值，强行修正
+            if pred_z < MIN_SAFE_Z:
+                # print(f"[Safety] Limit Z: {pred_z:.1f} -> {MIN_SAFE_Z}")
+                # 保持其他维度不变，只修改 Z
+                safe_pose = [pred_x, pred_y, MIN_SAFE_Z, pred_roll, pred_pitch, pred_yaw]
                 
-        #         # 3. 构造修正后的目标位姿 (Clamped Pose)
-        #         # 保持 X, Y, Roll, Pitch, Yaw 不变，强行把 Z 拉回到安全高度
-        #         safe_pose = [pred_x, pred_y, MIN_SAFE_Z, pred_roll, pred_pitch, pred_yaw]
+                # IK 解算回关节角度
+                ret_ik, ik_joints = self.arm.get_inverse_kinematics(safe_pose, input_is_radian=True, return_is_radian=True)
                 
-        #         # 4. 逆运动学 (IK) 解算回关节角度
-        #         ret_ik, ik_joints = self.arm.get_inverse_kinematics(safe_pose, input_is_radian=True, return_is_radian=True)
-                
-        #         if ret_ik == 0:
-        #             # 如果 IK 解算成功，用修正后的关节角度覆盖
-        #             safe_joints = ik_joints
-        #         else:
-        #             print("[Safety Error] IK解算失败，无法修正Z轴。跳过此步运动。")
-        #             return # 直接跳过这次指令，防止碰撞
-        # else:
-        #     # 如果算不出 FK (通常不会发生)，为安全起见可以选择跳过
-        #     pass 
+                if ret_ik == 0:
+                    safe_joints = list(ik_joints) # 使用修正后的关节角
+                else:
+                    print("[Safety] IK Failed, skipping step.")
+                    return # 解算失败则跳过
         # -------------------------------------------------------
 
-        full_joints = np.append(safe_joints, 0.0)
+        # -------------------------------------------------------
+        # 【核心修改】平滑减速插值 (Time Dilation)
+        # -------------------------------------------------------
+        # 获取当前机械臂的关节角度作为起点
+        code, current_joints_raw = self.arm.get_servo_angle(is_radian=True)
+        if code != 0:
+            print("[Error] Failed to get current joints, skip interpolation.")
+            return
 
-        # 2. 发送伺服指令 (弧度)
-        ret = self.arm.set_servo_angle_j(angles=full_joints, is_radian=True)
-        if ret != 0:
-            print(f"[Error] Servo failed: {ret}")
+        current_joints = np.array(current_joints_raw[:6])
+        target_joints = np.array(safe_joints[:6])
 
-        # 3. 夹爪逻辑
+        # 计算这一步应该花多少时间
+        # 原本是 1/10Hz = 0.1秒。现在乘以减速因子。
+        # 例如 SLOW_DOWN_FACTOR = 3.0，则 duration = 0.3秒
+        duration = (1.0 / CONTROL_FREQ) * SLOW_DOWN_FACTOR
+        
+        # 计算需要插值多少步
+        # 例如 0.3秒 * 100Hz = 30步
+        steps = int(duration * INTERPOLATION_FREQ)
+        
+        if steps < 1: steps = 1
+        
+        # 循环执行微小的插值动作
+        for i in range(1, steps + 1):
+            alpha = i / steps # 进度 0.0 ~ 1.0
+            
+            # 线性插值公式: 当前 + (目标-当前)*进度
+            interp_joints = current_joints + (target_joints - current_joints) * alpha
+            
+            # 补上第7维(无效位，SDK要求7维)
+            full_joints_interp = np.append(interp_joints, 0.0)
+            
+            # 发送给机械臂
+            self.arm.set_servo_angle_j(angles=full_joints_interp, is_radian=True)
+            
+            # 睡眠控制插值频率 (例如 0.01秒)
+            time.sleep(1.0 / INTERPOLATION_FREQ)
+
+        # -------------------------------------------------------
+        # 3. 夹爪逻辑 (动作执行完后再操作夹爪)
+        # -------------------------------------------------------
         if target_gripper > 0.8:
             self.close_gripper()
         elif target_gripper < 0.2:
