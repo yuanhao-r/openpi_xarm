@@ -69,13 +69,20 @@ class AutoDataRecorder:
         self.min_y = np.min(self.boundary_points_2d[:, 1])
         self.max_y = np.max(self.boundary_points_2d[:, 1])
         
+        # === 新增：网格分层采样参数 ===
+        self.grid_rows = 4  # 将区域分为 4x4 = 16 个格子
+        self.grid_cols = 4
+        self.total_grids = self.grid_rows * self.grid_cols # 总共9个区
+        self.current_grid_idx = 0 # 当前轮到的区域索引 (0-8)
+        
+        
         # ===================== 姿态随机化 =====================
         self.fixed_roll = self.pos_A[3]
         self.fixed_pitch = self.pos_A[4]
         
         # Yaw角度随机范围 (弧度)
         self.base_yaw = self.pos_A[5]
-        self.yaw_random_range = (-np.pi/6, np.pi/6)  # ±45度
+        self.yaw_random_range = (-np.pi/2, np.pi/6)  # ±45度
         self.current_yaw_angle = self.base_yaw
 
         # 运动速度
@@ -86,6 +93,15 @@ class AutoDataRecorder:
         
         # === 数据队列 ===
         self.data_queue = queue.Queue(maxsize=50)
+
+    def _refill_grid_indices(self):
+            """重新填充并打乱网格索引，保证下一轮采集能覆盖所有区域"""
+            self.grid_indices = []
+            for r in range(self.grid_rows):
+                for c in range(self.grid_cols):
+                    self.grid_indices.append((r, c))
+            random.shuffle(self.grid_indices) # 打乱顺序，避免走蛇形路径
+            print(">>> [Sampler] Grid reset. Starting new coverage cycle.")
 
     # ---------------------------------------------------------
     # 几何算法部分
@@ -170,38 +186,85 @@ class AutoDataRecorder:
         code, _ = self.arm.get_inverse_kinematics(pose, input_is_radian=True, return_is_radian=True)
         return code == 0
     
-    def sample_random_target(self):
-        # 1. 采样坐标
-        sample_xyz = self.sample_random_in_hull_2d()
-        target_x, target_y, target_z = sample_xyz
+    def sample_random_in_grid(self, row, col):
+        """
+        在指定的 (row, col) 网格内随机采样。
+        如果该网格完全在凸包外，可能会返回 None。
+        """
+        # 计算当前格子的边界
+        step_x = (self.max_x - self.min_x) / self.grid_cols
+        step_y = (self.max_y - self.min_y) / self.grid_rows
         
-        # 2. 随机生成yaw
-        self.current_yaw_angle = self.base_yaw + random.uniform(*self.yaw_random_range)
-        
-        candidate_pose = [
-            target_x, target_y, target_z, 
-            self.fixed_roll, self.fixed_pitch, self.current_yaw_angle
-        ]
+        cell_min_x = self.min_x + col * step_x
+        cell_max_x = cell_min_x + step_x
+        cell_min_y = self.min_y + row * step_y
+        cell_max_y = cell_min_y + step_y
 
-        # 3. 可达性检查 & 缩回机制
-        region_center_2d = np.mean(self.hull_points_2d, axis=0)
-        region_center_xyz = np.array([region_center_2d[0], region_center_2d[1], self.fixed_z])
-        
-        for i in range(20):
-            if self.check_pose_reachable(candidate_pose):
-                if i > 0:
-                    print(f"  [Warn] 目标点回缩 {i*10}% 后变得可达。")
-                return candidate_pose
+        # 在当前格子里尝试采样 (尝试30次)
+        # 如果这个格子只有一小角在凸包内，多试几次能命中
+        for _ in range(30):
+            x = random.uniform(cell_min_x, cell_max_x)
+            y = random.uniform(cell_min_y, cell_max_y)
+            sample_point_2d = np.array([x, y])
             
-            # 向中心回缩
-            vec_x = candidate_pose[0] - region_center_2d[0]
-            vec_y = candidate_pose[1] - region_center_2d[1]
-            candidate_pose[0] = region_center_2d[0] + vec_x * 0.9
-            candidate_pose[1] = region_center_2d[1] + vec_y * 0.9
+            # 必须在凸包(hull)内部
+            if self.is_point_inside_hull_2d(sample_point_2d, self.hull_2d):
+                return np.array([x, y, self.fixed_z])
         
-        print("[Error] 无法生成可达点，使用区域中心。")
-        return [region_center_xyz[0], region_center_xyz[1], region_center_xyz[2], 
-                self.fixed_roll, self.fixed_pitch, self.current_yaw_angle]
+        return None # 该格子很难采到点（可能在界外）
+        
+    def sample_random_target(self):
+        # 限制最大跳过次数，防止所有格子都不可达导致死循环
+        # 我们允许它把9个格子都扫一遍
+        grids_checked_count = 0
+        
+        while grids_checked_count < self.total_grids:
+            # 1. 计算当前应该去哪个格子 (0~8)
+            r = self.current_grid_idx // self.grid_cols # 行号 0,1,2
+            c = self.current_grid_idx % self.grid_cols  # 列号 0,1,2
+            
+            print(f"  [Sampler] Trying Grid {self.current_grid_idx} (Row {r}, Col {c})...", end="")
+
+            # 2. 在该格子内尝试生成点
+            sample_xyz = self.sample_random_in_grid(r, c)
+            
+            if sample_xyz is not None:
+                target_x, target_y, target_z = sample_xyz
+                
+                # 3. 尝试匹配一个可行的 Yaw 角度
+                # (在该位置尝试多次不同的角度，提高成功率)
+                for _ in range(10): 
+                    yaw_noise = random.uniform(*self.yaw_random_range)
+                    candidate_yaw = self.base_yaw + yaw_noise
+                    
+                    candidate_pose = [
+                        target_x, target_y, target_z, 
+                        self.fixed_roll, self.fixed_pitch, candidate_yaw
+                    ]
+
+                    # 4. 机械臂逆解检查 (可达性)
+                    if self.check_pose_reachable(candidate_pose):
+                        print(" OK.")
+                        # === 成功找到点 ===
+                        self.current_yaw_angle = candidate_yaw
+                        
+                        # !!! 关键：索引加1，为下一轮循环做准备 !!!
+                        self.current_grid_idx = (self.current_grid_idx + 1) % self.total_grids
+                        return candidate_pose
+
+            # === 如果运行到这里，说明当前格子 (Grid i) 采不到点或者不可达 ===
+            print(" Failed/Skip.")
+            
+            # 立即切换到下一个格子，并在本次函数调用中继续尝试
+            self.current_grid_idx = (self.current_grid_idx + 1) % self.total_grids
+            grids_checked_count += 1
+        
+        # === 保底逻辑 ===
+        # 如果把9个格子全扫了一遍都没找到点（极罕见），返回中心点
+        print("[Error] 9个区域均无法生成可达点，使用中心保底。")
+        region_center_2d = np.mean(self.hull_points_2d, axis=0)
+        return [region_center_2d[0], region_center_2d[1], self.fixed_z, 
+                self.fixed_roll, self.fixed_pitch, self.base_yaw]
 
     # ---------------------------------------------------------
     # 相机后台线程 - 核心优化部分
@@ -466,7 +529,7 @@ class AutoDataRecorder:
                 self.move_to(safe_pos_up, speed=self.speed_record) 
                 self.move_to(target_pos, speed=self.speed_record)
                 self.close_gripper()
-                time.sleep(1.5)
+                time.sleep(1.0)
                 
                 self.stop_recording()
                 print("[Record] 录制完成")
@@ -490,7 +553,7 @@ class AutoDataRecorder:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--ip", type=str, default="192.168.1.232", help="xArm IP")
-    parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/exp9_data_auto_queue_PutAndRecord_1224/raw", help="Output directory")
+    parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/exp10_data_auto_queue_PutAndRecord_1229/raw", help="Output directory")
     # parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/test/raw", help="Output directory")
     args = parser.parse_args()
     
