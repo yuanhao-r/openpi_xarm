@@ -46,45 +46,16 @@ class AutoDataRecorder:
         self.fixed_z = self.pos_A[2]  # Z轴固定为桌面高度
 
         # ===================== 2D凸包区域定义 =====================
-        # self.boundary_points_2d = np.array([
-        #     [687.265564, 192.331894],  # 左下
-        #     [455.756531, 156.93837],   # 右下
-        #     [472.610046, -116.043983], # 右上
-        #     [661.338684, -41.658051],  # 左上
-        # ])
         self.boundary_points_2d = np.array([
-            [505.982422, -150.631149],  # 左下
+            [548.982422, -66.848724],  # 左下
             [724.302856, -66.848724],   # 右下
             [724.232117, 240.781003], # 右上
             [428.805481, 203.618057],  # 左上
         ])
         
-  
-        
-        
-        # 1. 构建凸包
+        # 构建2D凸包
         self.hull_2d = ConvexHull(self.boundary_points_2d)
-        
-        # 2. 获取逆时针顶点 (ConvexHull 默认是 CCW)
-        ccw_indices = self.hull_2d.vertices
-        self.ccw_vertices = self.boundary_points_2d[ccw_indices]
-        
-        # 3. 预计算路径 (始终保持逆时针顺序存储)
-        self.boundary_step_size = 20.0 
-        self.path_points_2d = self._generate_boundary_path(self.ccw_vertices, self.boundary_step_size)
-        
-        # 4. 路径控制变量
-        self.current_path_idx = 0
-        self.total_path_points = len(self.path_points_2d)
-        
-        # === 新增：方向控制变量 ===
-        #  1 = 索引增加 (逆时针 CCW)
-        # -1 = 索引减少 (顺时针 CW)
-        self.path_direction = 1 
-        
-        dir_name = "CCW (逆时针)" if self.path_direction == 1 else "CW (顺时针)"
-        print(f">>> [Sampler] Mode: Boundary Trace | Initial Dir: {dir_name}")
-        print(f"    Step Size: {self.boundary_step_size}mm | Total Points: {self.total_path_points}")
+        self.hull_points_2d = self.boundary_points_2d[self.hull_2d.vertices]
         
         # 计算包围盒（用于快速采样）
         self.min_x = np.min(self.boundary_points_2d[:, 0])
@@ -98,7 +69,10 @@ class AutoDataRecorder:
         self.total_grids = self.grid_rows * self.grid_cols # 总共9个区
         self.current_grid_idx = 0 # 当前轮到的区域索引 (0-8)
         
-        
+        # 这里的列表将存储待访问的格子坐标 [(0,0), (0,1), ... (3,3)]
+        self.grid_indices = [] 
+        # 初始化并打乱第一次的顺序
+        self._refill_grid_indices()
         # ===================== 姿态随机化 =====================
         self.fixed_roll = self.pos_A[3]
         self.fixed_pitch = self.pos_A[4]
@@ -116,58 +90,23 @@ class AutoDataRecorder:
         
         # === 数据队列 ===
         self.data_queue = queue.Queue(maxsize=50)
-
-    def input_listener(self):
-        print(">>> 键盘控制开启: 输入 'p' 暂停，输入 'a' 切换方向 (需按回车)")
-        while True:
-            #以此处获取输入，注意：标准input需要按回车
-            cmd = input().strip().lower()
-            
-            if cmd == 'p':
-                self.pause_requested = True
-                print("\n>>> [指令收到] 将在当前循环结束后暂停...")
-            
-            elif cmd == 'a':
-                # 切换方向：乘以 -1 实现反转
-                self.path_direction *= -1
-                
-                new_dir = "逆时针 (CCW)" if self.path_direction == 1 else "顺时针 (CW)"
-                print(f"\n>>> [指令收到] 方向已切换！下一次将向 {new_dir} 移动。")
-
-    def _refill_grid_indices(self):
-            """重新填充并打乱网格索引，保证下一轮采集能覆盖所有区域"""
-            self.grid_indices = []
-            for r in range(self.grid_rows):
-                for c in range(self.grid_cols):
-                    self.grid_indices.append((r, c))
-            random.shuffle(self.grid_indices) # 打乱顺序，避免走蛇形路径
-            print(">>> [Sampler] Grid reset. Starting new coverage cycle.")
-    def _generate_boundary_path(self, vertices, step_size):
-        """生成沿着边界顺时针移动的密集点序列"""
-        path = []
-        num_v = len(vertices)
         
-        for i in range(num_v):
-            # 当前顶点 和 下一个顶点 (形成闭环)
-            p_curr = vertices[i]
-            p_next = vertices[(i + 1) % num_v]
-            
-            # 计算这一段边的长度和方向向量
-            vec = p_next - p_curr
-            dist = np.linalg.norm(vec)
-            
-            # 这一段边需要插多少个点
-            # max(1, ...) 保证至少有一个点
-            steps = int(max(1, dist / step_size))
-            
-            unit_vec = vec / dist
-            
-            for s in range(steps):
-                # 线性插值
-                point = p_curr + unit_vec * (s * step_size)
-                path.append(point)
-                
-        return np.array(path)
+        # === 扰动参数 ===
+        self.perturbation_prob = 0.7  # 70% 的概率加入扰动（故意走偏再修正）
+        self.perturbation_range = 30.0 # 扰动范围 30mm (3cm)
+        
+    def _refill_grid_indices(self):
+        """重新填充并打乱网格索引，保证下一轮采集能覆盖所有区域，但顺序随机"""
+        self.grid_indices = []
+        for r in range(self.grid_rows):
+            for c in range(self.grid_cols):
+                self.grid_indices.append((r, c))
+        
+        # 核心：打乱列表顺序
+        random.shuffle(self.grid_indices) 
+        print(f">>> [Sampler] Grid reset & shuffled. Sequence length: {len(self.grid_indices)}")
+
+
     # ---------------------------------------------------------
     # 几何算法部分
     # ---------------------------------------------------------
@@ -279,54 +218,57 @@ class AutoDataRecorder:
         return None # 该格子很难采到点（可能在界外）
         
     def sample_random_target(self):
-        max_attempts = self.total_path_points + 10
-        attempts = 0
+        # 设置一个最大尝试次数，防止极端情况下所有格子都不可达导致死循环
+        # 这里设置为总格子数的 2 倍，足够遍历完一轮
+        max_checks = self.total_grids * 2
+        checks_count = 0
         
-        while attempts < max_attempts:
-            # 1. 取出当前点
-            target_2d = self.path_points_2d[self.current_path_idx]
+        while checks_count < max_checks:
+            # 1. 如果列表空了，立刻重新填充并打乱（开启新的一轮循环）
+            if not self.grid_indices:
+                self._refill_grid_indices()
             
-            target_x = target_2d[0]
-            target_y = target_2d[1]
-            target_z = self.fixed_z
+            # 2. 从列表末尾弹出一个格子 (因为列表已经Shuffle过，所以这是随机的)
+            r, c = self.grid_indices.pop()
             
-            # 2. 尝试随机 Yaw
-            for _ in range(10):
-                yaw_noise = random.uniform(*self.yaw_random_range)
-                candidate_yaw = self.base_yaw + yaw_noise
-                
-                candidate_pose = [
-                    target_x, target_y, target_z, 
-                    self.fixed_roll, self.fixed_pitch, candidate_yaw
-                ]
+            # 用于显示进度的索引（仅作显示用）
+            current_idx = r * self.grid_cols + c
+            print(f"  [Sampler] Trying Random Grid ({r}, {c}) [ID:{current_idx}]...", end="")
 
-                # 3. 可达性检查
-                if self.check_pose_reachable(candidate_pose):
-                    # 打印当前方向状态
-                    dir_arrow = "CCW(↺)" if self.path_direction == 1 else "CW(↻)"
-                    progress = (self.current_path_idx + 1) / self.total_path_points * 100
-                    
-                    print(f"  [Sampler] {dir_arrow} Point {self.current_path_idx}/{self.total_path_points} ({progress:.1f}%) -> OK.")
-                    
-                    self.current_yaw_angle = candidate_yaw
-                    
-                    # === 关键修改：根据 path_direction 更新索引 ===
-                    # 如果 direction 是 -1，Python 会自动处理负数取模 (例如 -1 % 100 = 99)
-                    self.current_path_idx = (self.current_path_idx + self.path_direction) % self.total_path_points
-                    
-                    return candidate_pose
+            # 3. 在该格子内尝试生成点
+            sample_xyz = self.sample_random_in_grid(r, c)
             
-            # === 如果当前点不可达，跳过 ===
-            print(f"  [Warn] Point {self.current_path_idx} Unreachable. Skipping...")
-            
-            # 同样按照当前方向跳到下一个点
-            self.current_path_idx = (self.current_path_idx + self.path_direction) % self.total_path_points
-            attempts += 1
-            
-        print("[Error] 路径均不可达，返回中心。")
-        region_center_2d = np.mean(self.boundary_points_2d, axis=0)
+            if sample_xyz is not None:
+                target_x, target_y, target_z = sample_xyz
+                
+                # 4. 尝试匹配一个可行的 Yaw 角度
+                for _ in range(10): 
+                    yaw_noise = random.uniform(*self.yaw_random_range)
+                    candidate_yaw = self.base_yaw + yaw_noise
+                    
+                    candidate_pose = [
+                        target_x, target_y, target_z, 
+                        self.fixed_roll, self.fixed_pitch, candidate_yaw
+                    ]
+
+                    # 5. 机械臂逆解检查 (可达性)
+                    if self.check_pose_reachable(candidate_pose):
+                        print(" OK.")
+                        self.current_yaw_angle = candidate_yaw
+                        return candidate_pose
+
+            # === 如果运行到这里，说明当前随机到的格子不可达或不在凸包内 ===
+            print(" Failed/Skip.")
+            # 注意：这里不需要手动切到下一个，因为 grid_indices.pop() 已经把它移除列表了
+            # 下次循环会自动 pop 列表里的下一个随机格子
+            checks_count += 1
+        
+        # === 保底逻辑 ===
+        print("[Error] 无法生成可达点，使用中心保底。")
+        region_center_2d = np.mean(self.hull_points_2d, axis=0)
         return [region_center_2d[0], region_center_2d[1], self.fixed_z, 
                 self.fixed_roll, self.fixed_pitch, self.base_yaw]
+
     # ---------------------------------------------------------
     # 相机后台线程 - 核心优化部分
     # ---------------------------------------------------------
@@ -502,12 +444,12 @@ class AutoDataRecorder:
             self.stop_event.set()
             self.rec_thread.join()
 
-    # def input_listener(self):
-    #     while True:
-    #         cmd = input()
-    #         if cmd.strip().lower() == 'p':
-    #             self.pause_requested = True
-    #             print("\n>>> [指令收到] 将在当前循环结束后暂停...")
+    def input_listener(self):
+        while True:
+            cmd = input()
+            if cmd.strip().lower() == 'p':
+                self.pause_requested = True
+                print("\n>>> [指令收到] 将在当前循环结束后暂停...")
 
     # ---------------------------------------------------------
     # 主流程
@@ -584,11 +526,37 @@ class AutoDataRecorder:
                 print(f"[Record] 开始录制 Episode {episode_idx}")
                 
                 time.sleep(1.0) # 确保机械臂完全静止，也确保相机画面稳定
-                self.start_recording(episode_idx, "pick up the industrial components C")
+                self.start_recording(episode_idx, "pick up the industrial components")
                 
                 # 抓取动作
                 self.move_to(safe_pos_up, speed=self.speed_record) 
-                self.move_to(target_pos, speed=self.speed_record)
+                # --- 核心改进：决定是否加入扰动 ---
+                if random.random() < self.perturbation_prob:
+                    # 生成一个XY平面的随机偏差 (噪音)
+                    noise_x = random.uniform(-self.perturbation_range, self.perturbation_range)
+                    noise_y = random.uniform(-self.perturbation_range, self.perturbation_range)
+                    
+                    # 构造一个“稍微偏一点”的中间点
+                    # 高度建议比最终抓取点稍高一点点(比如高1cm)，或者就在同一平面，看你需求
+                    # 这里设置为：在抓取点上方 1cm 处，且水平方向有偏差
+                    perturb_pos = list(target_pos)
+                    perturb_pos[0] += noise_x
+                    perturb_pos[1] += noise_y
+                    perturb_pos[2] += 10.0 # 稍微高一点，避免直接撞击物体侧面
+                    
+                    print(f"  [Perturb] 插入扰动: x{noise_x:.1f}, y{noise_y:.1f}")
+                    
+                    # 动作1: 故意走偏 (移动到扰动点)
+                    self.move_to(perturb_pos, speed=self.speed_record)
+                    
+                    # 动作2: 修正 (从扰动点移动到正确的抓取点)
+                    # 这就是模型最需要学习的“纠正行为”！
+                    self.move_to(target_pos, speed=self.speed_record * 0.8) # 修正时稍微慢一点，模拟精细操作
+                    
+                else:
+                    # 30% 的概率走完美直线 (作为基准数据)
+                    print("  [Direct] 直线抓取")
+                    self.move_to(target_pos, speed=self.speed_record)
                 self.close_gripper()
                 time.sleep(2.0)
                 
@@ -614,14 +582,19 @@ class AutoDataRecorder:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--ip", type=str, default="192.168.1.232", help="xArm IP")
-    parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/exp10_data_auto_queue_PutAndRecord_1229/raw", help="Output directory")
+    parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/exp12_data_auto_queue_PutAndRecord_0104/raw", help="Output directory")
     # parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/test/raw", help="Output directory")
     args = parser.parse_args()
     
+    # cameras = {
+    #     "cam_high": 4,
+    #     "cam_left_wrist": 0,
+    #     "cam_right_wrist": 2
+    # }
     cameras = {
-        "cam_high": 4,
-        "cam_left_wrist": 0,
-        "cam_right_wrist": 2
+        "cam_high": "/dev/cam_high",
+        "cam_left_wrist": "/dev/cam_left_wrist",
+        "cam_right_wrist": "/dev/cam_right_wrist"
     }
     
     my_crop_configs = {

@@ -84,7 +84,7 @@ def images_to_gif(image_dir, output_gif_path, frame_duration=100, image_formats=
 if __name__ == "__main__":
     # ========== 配置参数（根据需要修改） ==========
     # 目标图片目录（你指定的路径）
-    IMAGE_DIR = "/home/openpi/data/data_raw/exp10_data_auto_queue_PutAndRecord_1229/raw/episode_227/images/cam_left_wrist"
+    IMAGE_DIR = "/home/openpi/data/data_raw/exp10_data_auto_queue_PutAndRecord_1229/raw/episode_1193/images/cam_left_wrist"
     # 输出GIF路径（建议保存在易访问的位置）
     OUTPUT_GIF = "./1.gif"
     # 每帧时长（毫秒），默认100ms，值越小播放越快

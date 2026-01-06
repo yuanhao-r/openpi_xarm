@@ -42,21 +42,15 @@ class AutoDataRecorder:
 
         # --- 关键位姿定义 (单位: 毫米/弧度) ---
         self.pos_home = [539.120605, 17.047951, 100-69.568863, 3.12897, 0.012689, -1.01436]
-        self.pos_A = [539.120605, 17.047951, -69.568863, 3.12897, 0.012689, -1.01436]
+        self.pos_A = [539.120605, 17.047951, -79.568863, 3.12897, 0.012689, -1.01436]
         self.fixed_z = self.pos_A[2]  # Z轴固定为桌面高度
 
         # ===================== 2D凸包区域定义 =====================
-        # self.boundary_points_2d = np.array([
-        #     [687.265564, 192.331894],  # 左下
-        #     [455.756531, 156.93837],   # 右下
-        #     [472.610046, -116.043983], # 右上
-        #     [661.338684, -41.658051],  # 左上
-        # ])
         self.boundary_points_2d = np.array([
             [505.982422, -150.631149],  # 左下
-            [712.302856, -66.848724],   # 右下
-            [697.232117, 163.981003], # 右上
-            [466.805481, 144.618057],  # 左上
+            [724.302856, -66.848724],   # 右下
+            [724.232117, 240.781003], # 右上
+            [428.805481, 203.618057],  # 左上
         ])
         
         # 构建2D凸包
@@ -523,13 +517,13 @@ class AutoDataRecorder:
                 print(f"[Record] 开始录制 Episode {episode_idx}")
                 
                 time.sleep(1.0) # 确保机械臂完全静止，也确保相机画面稳定
-                self.start_recording(episode_idx, "pick up the industrial components")
+                self.start_recording(episode_idx, "pick up the industrial components C")
                 
                 # 抓取动作
                 self.move_to(safe_pos_up, speed=self.speed_record) 
                 self.move_to(target_pos, speed=self.speed_record)
                 self.close_gripper()
-                time.sleep(1.0)
+                time.sleep(2.0)
                 
                 self.stop_recording()
                 print("[Record] 录制完成")
@@ -557,10 +551,15 @@ if __name__ == "__main__":
     # parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/test/raw", help="Output directory")
     args = parser.parse_args()
     
+    # cameras = {
+    #     "cam_high": 4,
+    #     "cam_left_wrist": 0,
+    #     "cam_right_wrist": 2
+    # }
     cameras = {
-        "cam_high": 4,
-        "cam_left_wrist": 0,
-        "cam_right_wrist": 2
+        "cam_high": "/dev/cam_high",
+        "cam_left_wrist": "/dev/cam_left_wrist",
+        "cam_right_wrist": "/dev/cam_right_wrist"
     }
     
     my_crop_configs = {

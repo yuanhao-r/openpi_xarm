@@ -32,7 +32,7 @@ CONFIG_NAME = "pi05_xarm_1212_night"
 # 请确认这是你最新的、用【弧度】数据训练的 checkpoint
 # CHECKPOINT_DIR = "/home/hil-serl/openpi_test/openpi/checkpoints/1207night/19999" 
 # CHECKPOINT_DIR = "/home/openpi/checkpoints/1222_night/10hz/8000"     #实验三
-CHECKPOINT_DIR = "/home/openpi/checkpoints/exp9/30000"          #实验四
+CHECKPOINT_DIR = "/home/openpi/checkpoints/exp9/94000"          #实验四
 CAMERAS = {
     # "cam_high": 4,
     "cam_left_wrist": 0,
