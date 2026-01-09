@@ -42,7 +42,7 @@ class AutoDataRecorder:
 
         # --- 关键位姿定义 (单位: 毫米/弧度) ---
         self.pos_home = [539.120605, 17.047951, 100-69.568863, 3.12897, 0.012689, -1.01436]
-        self.pos_A = [539.120605, 17.047951, -69.568863, 3.12897, 0.012689, -1.01436]
+        self.pos_A = [539.120605, 17.047951, -60.568863, 3.12897, 0.012689, -1.01436]
         self.fixed_z = self.pos_A[2]  # Z轴固定为桌面高度
 
         # ===================== 2D凸包区域定义 =====================
@@ -92,7 +92,7 @@ class AutoDataRecorder:
         self.data_queue = queue.Queue(maxsize=50)
         
         # === 扰动参数 ===
-        self.perturbation_prob = 0.7  # 70% 的概率加入扰动（故意走偏再修正）
+        self.perturbation_prob = 0.6  # 60% 的概率加入扰动（故意走偏再修正）
         self.perturbation_range = 30.0 # 扰动范围 30mm (3cm)
         
     def _refill_grid_indices(self):
@@ -532,26 +532,104 @@ class AutoDataRecorder:
                 self.move_to(safe_pos_up, speed=self.speed_record) 
                 # --- 核心改进：决定是否加入扰动 ---
                 if random.random() < self.perturbation_prob:
-                    # 生成一个XY平面的随机偏差 (噪音)
-                    noise_x = random.uniform(-self.perturbation_range, self.perturbation_range)
-                    noise_y = random.uniform(-self.perturbation_range, self.perturbation_range)
+                    # # 生成一个XY平面的随机偏差 (噪音)
+                    # noise_x = random.uniform(-self.perturbation_range, self.perturbation_range)
+                    # noise_y = random.uniform(-self.perturbation_range, self.perturbation_range)
                     
-                    # 构造一个“稍微偏一点”的中间点
-                    # 高度建议比最终抓取点稍高一点点(比如高1cm)，或者就在同一平面，看你需求
-                    # 这里设置为：在抓取点上方 1cm 处，且水平方向有偏差
-                    perturb_pos = list(target_pos)
-                    perturb_pos[0] += noise_x
-                    perturb_pos[1] += noise_y
-                    perturb_pos[2] += 10.0 # 稍微高一点，避免直接撞击物体侧面
+                    # # 构造一个“稍微偏一点”的中间点
+                    # # 高度建议比最终抓取点稍高一点点(比如高1cm)，或者就在同一平面，看你需求
+                    # # 这里设置为：在抓取点上方 1cm 处，且水平方向有偏差
+                    # perturb_pos = list(target_pos)
+                    # perturb_pos[0] += noise_x
+                    # perturb_pos[1] += noise_y
+                    # perturb_pos[2] += 10.0 # 稍微高一点，避免直接撞击物体侧面
                     
-                    print(f"  [Perturb] 插入扰动: x{noise_x:.1f}, y{noise_y:.1f}")
+                    # print(f"  [Perturb] 插入扰动: x{noise_x:.1f}, y{noise_y:.1f}")
                     
-                    # 动作1: 故意走偏 (移动到扰动点)
-                    self.move_to(perturb_pos, speed=self.speed_record)
+                    # # 动作1: 故意走偏 (移动到扰动点)
+                    # self.move_to(perturb_pos, speed=self.speed_record)
                     
-                    # 动作2: 修正 (从扰动点移动到正确的抓取点)
-                    # 这就是模型最需要学习的“纠正行为”！
-                    self.move_to(target_pos, speed=self.speed_record * 0.8) # 修正时稍微慢一点，模拟精细操作
+                    # # 动作2: 修正 (从扰动点移动到正确的抓取点)
+                    # # 这就是模型最需要学习的“纠正行为”！
+                    # self.move_to(target_pos, speed=self.speed_record * 0.8) # 修正时稍微慢一点，模拟精细操作
+                    
+                    
+                    #用于模拟走过头，而非原先的上方随机点
+                    # 计算“冲过头”的方向向量
+                    # 向量 = 目标点(XY) - 起始点(XY)
+                    vec_x = target_pos[0] - safe_pos_up[0]
+                    vec_y = target_pos[1] - safe_pos_up[1]
+                    
+                    # 归一化向量
+                    norm = np.sqrt(vec_x**2 + vec_y**2)
+                    if norm > 0:
+                        dir_x = vec_x / norm
+                        dir_y = vec_y / norm
+                    else:
+                        dir_x, dir_y = 0, 0
+                    # 定义扰动类型
+                    # 70% 的概率模拟“冲过头”（沿着运动方向继续往前冲）
+                    # 30% 的概率模拟“左右偏”（随机噪音）
+                    if random.random() < 0.7:
+                        print(f"  [Perturb] 模拟沿着yaw偏差")
+                        # 1. 获取当前的 Yaw 角度
+                        target_yaw = target_pos[5]
+                        # 2. 计算 Yaw 角度对应的单位向量 (夹爪的朝向线)
+                        yaw_vec_x = np.cos(target_yaw)
+                        yaw_vec_y = np.sin(target_yaw)
+                        # 3. 判断哪个方向是“远离起始点”的
+                        # 计算从 Home 到 Target 的宏观趋势向量
+                        approach_vec_x = target_pos[0] - self.pos_home[0]
+                        approach_vec_y = target_pos[1] - self.pos_home[1]
+                        # 使用点积判断方向一致性
+                        # dot > 0: Yaw指向与宏观运动方向大致相同 -> 沿 Yaw 正方向冲
+                        # dot < 0: Yaw指向与宏观运动方向相反 -> 沿 Yaw 负方向冲
+                        dot_product = yaw_vec_x * approach_vec_x + yaw_vec_y * approach_vec_y
+                        direction_sign = 1.0 if dot_product >= 0 else -1.0
+                        # 4. 定义扰动参数
+                        # 冲过头的距离：3cm 到 6cm
+                        overshoot_dist = random.uniform(20.0, 60.0)
+                        # 构造扰动点 (错误点)
+                        perturb_pos = list(target_pos)
+                        # -> 沿着 Yaw 确定的直线，往远离 Home 的方向移动
+                        perturb_pos[0] += direction_sign * yaw_vec_x * overshoot_dist
+                        perturb_pos[1] += direction_sign * yaw_vec_y * overshoot_dist
+                        # -> Z 轴处理：同样保持“斜向下插”的趋势
+                        # 比最终点高 1.5cm ~ 3cm，模拟没刹住车斜着滑过去
+                        perturb_pos[2] = target_pos[2] + random.uniform(15.0, 30.0)
+                        # -> Yaw 严格保持不变 (这是关键，姿态是准的，只是位置滑了)
+                        perturb_pos[5] = target_yaw
+                        
+                        print(f"  [Perturb] 沿Yaw轴冲过头: dist={overshoot_dist:.1f}mm, Yaw={np.degrees(target_yaw):.1f}°")
+                        # === 执行动作序列 ===
+                    
+                        # 动作 1: 带着惯性，沿着夹爪朝向冲过头
+                        self.move_to(perturb_pos, speed=self.speed_record)
+                        
+                        # 动作 2: 修正 (回拉并下降)
+                        # 这一步教会模型：当发现自己沿着夹爪方向跑过了，要倒车回来
+                        self.move_to(target_pos, speed=self.speed_record * 0.8)
+                        
+                       
+                    else:
+                        # 模拟随机偏离（原来的逻辑）
+                        noise_x = random.uniform(-self.perturbation_range, self.perturbation_range)
+                        noise_y = random.uniform(-self.perturbation_range, self.perturbation_range)
+                        print(f"  [Perturb] 模拟随机偏差 (Random Drift): x{noise_x:.1f}, y{noise_y:.1f}")
+                    
+                        # 构造扰动点（错误点）
+                        perturb_pos = list(target_pos)
+                        perturb_pos[0] += noise_x
+                        perturb_pos[1] += noise_y
+                        # 关键：扰动点的高度要稍微高一点 (比如+15mm)，防止冲过头时把物体撞飞
+                        perturb_pos[2] += 15.0 
+                        
+                        # 动作1: 执行“错误”的移动 (移动到扰动点)
+                        self.move_to(perturb_pos, speed=self.speed_record)
+                        
+                        # 动作2: 执行“修正” (从扰动点拉回到正确的抓取点)
+                        # 稍微降速，让模型看清楚“我是怎么回来的”
+                        self.move_to(target_pos, speed=self.speed_record * 0.8) 
                     
                 else:
                     # 30% 的概率走完美直线 (作为基准数据)
@@ -582,7 +660,7 @@ class AutoDataRecorder:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--ip", type=str, default="192.168.1.232", help="xArm IP")
-    parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/exp12_data_auto_queue_PutAndRecord_0104/raw", help="Output directory")
+    parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/exp13_data_auto_queue_PutAndRecord_0107/raw", help="Output directory")
     # parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/test/raw", help="Output directory")
     args = parser.parse_args()
     

@@ -7,10 +7,12 @@ record_and_transform/record_randomOrder.py 改进后的采集数据代码，把�
 record_and_transform/bound_region_record.py 改进后的采集数据代码，用于采集边缘区域，沿着边缘区域进行采集，可以通过终端输入变换遍历边缘的方向（顺时针、逆时针）
 record_and_transform/update_instructions.py 用于批量更改采集到的原始数据data.jsonl中的命令，用于采集多工件的时候忘记更改文本命令
 record_and_transform/convert_realtime.py 用于转换原始数据到指定格式，可以实时转换，缺点是当删除某个错误的原始数据的时候不能自动删除转换后的数据，需要把整个转换后的数据目录都删除，然后重新运行
+record_and_transform/record_withRandomNoise.py 用于模拟夹爪yaw对准且在工件正上方的情况下，朝着yaw方向运动过头再纠正回来的过程
 
 ### 使用方法
 record_and_transform/record_randomOrder.py 采集适量区域数据
 record_and_transform/bound_region_record.py 采集适量边缘数据
+或者 record_and_transform/record_withRandomNoise.py 采集纠正数据
 record_and_transform/convert_realtime.py 转换数据
 tar -zcvf **.tar.gz ** 压缩转换后的数据，然后传到训练端服务器
 

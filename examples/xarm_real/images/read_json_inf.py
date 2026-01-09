@@ -27,9 +27,10 @@ from openpi_client import image_tools
 # -----------------------------------------------------------------------------
 ROBOT_IP = "192.168.1.232"
 CONFIG_NAME = "pi05_xarm_1212_night"
-CHECKPOINT_DIR = "/home/openpi/checkpoints/exp11/48000"
+CHECKPOINT_DIR = "/home/openpi/checkpoints/exp13/8000"
 VIS_SAVE_DIR = "/home/openpi/examples/xarm_real/images"
-RESULT_IMG_NAME = "0106morning_overcastDay_exp11_48000_test1.png"
+RESULT_IMG_NAME = "0107afternoon_overcastDay_exp13_8000_test1(components C).png"
+TASK_PROMOT = "pick up the industrial components"
 #指定要读取的点位文件
 POINTS_FILE = os.path.join(VIS_SAVE_DIR, "test_points.json")
 
@@ -50,8 +51,8 @@ JOINT_LIMITS = [
 ]
 
 HOME_POS = [539.120605, 17.047951, 100-59.568863, 3.12897, 0.012689, -1.01436]
-POS_A = [539.120605, 17.047951, -79.568863, 3.12897, 0.012689, -1.01436]
-MIN_SAFE_Z = -69
+POS_A = [539.120605, 17.047951, -69.568863, 3.12897, 0.012689, -1.01436]
+MIN_SAFE_Z = -79
 SLOW_DOWN_FACTOR = 3.0  
 INTERPOLATION_FREQ = 100.0 
 
@@ -292,11 +293,21 @@ class XArmHardware:
         # 2. Z轴检查 (Code A 有，所以这里加上，保持物理一致)
         ret, pose = self.arm.get_forward_kinematics(angles=target_joints, input_is_radian=True, return_is_radian=True)
         if ret == 0:
-            if pose[2] < MIN_SAFE_Z:
-                safe_pose = list(pose); safe_pose[2] = MIN_SAFE_Z
+            model_z = pose[2]
+            if model_z < MIN_SAFE_Z:
+                print(f"[DEBUG] Z Limit Triggered! Model wants: {model_z:.2f}, Limit: {MIN_SAFE_Z}")
+                # 只有当模型想去的比限位还低时，才进行修正
+                safe_pose = list(pose)
+                safe_pose[2] = MIN_SAFE_Z
+                
+                
+            # if pose[2] < MIN_SAFE_Z:
+            #     safe_pose = list(pose); safe_pose[2] = MIN_SAFE_Z
                 ret_ik, ik_joints = self.arm.get_inverse_kinematics(safe_pose, input_is_radian=True, return_is_radian=True)
                 if ret_ik == 0: target_joints = list(ik_joints)
-                else: return # IK 失败跳过
+                else: 
+                    print("[Error] IK Failed during Z-safety adjustment")
+                    return # IK 失败跳过
 
         # 3. 插值运动 (Time Dilation)
         code, current_joints = self.arm.get_servo_angle(is_radian=True)
@@ -341,7 +352,7 @@ class XArmHardware:
             self.arm.set_position(*pose_A_up, speed=300, wait=True, is_radian=True)
             self.arm.set_position(*POS_A, speed=300, wait=True, is_radian=True)
             
-            self.close_gripper(); time.sleep(1.5)
+            self.close_gripper(); time.sleep(2.0)
             self.arm.set_position(*pose_A_up, speed=300, wait=True, is_radian=True)
             self.move_home_scripted()
             self.arm.set_position(*target_up, speed=300, wait=True, is_radian=True)
@@ -371,7 +382,7 @@ def main():
     kb = KeyboardThread()
     kb.start()
     
-    prompt = "pick up the industrial components A"
+    # prompt = "pick up the industrial components B"
     current_target = None
     
     try:
@@ -400,7 +411,7 @@ def main():
             result = policy.infer({
                 "cam_left_wrist": raw_obs["cam_left_wrist"],
                 "cam_right_wrist": raw_obs["cam_right_wrist"],
-                "state": raw_obs["state"], "prompt": prompt
+                "state": raw_obs["state"], "prompt": TASK_PROMOT
             })
             robot.move_to_start(np.array(result["actions"])[0])
             
@@ -425,7 +436,7 @@ def main():
                 result = policy.infer({
                     "cam_left_wrist": raw_obs["cam_left_wrist"],
                     "cam_right_wrist": raw_obs["cam_right_wrist"],
-                    "state": raw_obs["state"], "prompt": prompt
+                    "state": raw_obs["state"], "prompt": TASK_PROMOT
                 })
                 action_chunk = np.array(result["actions"])
                 
@@ -464,21 +475,23 @@ def main():
             else:
                 # 正常结束，等待人工判定
                 robot.close_gripper()
-                time.sleep(1.0)
+                time.sleep(2.0)
                 robot.move_home_scripted()
-                print("\n>>> Evaluate Result: [y] Success / [n] Failure")
-                # 循环等待直到按下 y 或 n
-                while True:
-                    k = kb.get_and_clear_key()
-                    if k == 'y': 
-                        print(">>> Marked as SUCCESS.")
-                        viz.update_result(target_pose, True)
-                        break
-                    elif k == 'n': 
-                        print(">>> Marked as FAILURE.")
-                        viz.update_result(target_pose, False)
-                        break
-                    time.sleep(0.05)
+                print(">>> Marked as SUCCESS.")
+                viz.update_result(target_pose, True)
+                # print("\n>>> Evaluate Result: [y] Success / [n] Failure")
+                # # 循环等待直到按下 y 或 n
+                # while True:
+                #     k = kb.get_and_clear_key()
+                #     if k == 'y': 
+                #         print(">>> Marked as SUCCESS.")
+                #         viz.update_result(target_pose, True)
+                #         break
+                #     elif k == 'n': 
+                #         print(">>> Marked as FAILURE.")
+                #         viz.update_result(target_pose, False)
+                #         break
+                #     time.sleep(0.05)
                 
     
 

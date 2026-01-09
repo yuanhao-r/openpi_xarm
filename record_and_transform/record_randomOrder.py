@@ -42,7 +42,7 @@ class AutoDataRecorder:
 
         # --- 关键位姿定义 (单位: 毫米/弧度) ---
         self.pos_home = [539.120605, 17.047951, 100-69.568863, 3.12897, 0.012689, -1.01436]
-        self.pos_A = [539.120605, 17.047951, -69.568863, 3.12897, 0.012689, -1.01436]
+        self.pos_A = [539.120605, 17.047951, -60.568863, 3.12897, 0.012689, -1.01436]
         self.fixed_z = self.pos_A[2]  # Z轴固定为桌面高度
 
         # ===================== 2D凸包区域定义 =====================
@@ -521,7 +521,7 @@ class AutoDataRecorder:
                 print(f"[Record] 开始录制 Episode {episode_idx}")
                 
                 time.sleep(1.0) # 确保机械臂完全静止，也确保相机画面稳定
-                self.start_recording(episode_idx, "pick up the industrial components")
+                self.start_recording(episode_idx, "pick up the industrial flat components")
                 
                 # 抓取动作
                 self.move_to(safe_pos_up, speed=self.speed_record) 
@@ -551,7 +551,7 @@ class AutoDataRecorder:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--ip", type=str, default="192.168.1.232", help="xArm IP")
-    parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/exp12_data_auto_queue_PutAndRecord_0104/raw", help="Output directory")
+    parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/exp15_data_auto_queue_PutAndRecord_0108/raw", help="Output directory")
     # parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/test/raw", help="Output directory")
     args = parser.parse_args()
     
