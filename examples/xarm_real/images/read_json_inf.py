@@ -22,21 +22,25 @@ from openpi.training import config as _config
 from openpi.policies import policy_config
 from openpi_client import image_tools
 
+import matplotlib
+matplotlib.use('Agg') # 设置后端为非交互式，Docker 专用
+import matplotlib.pyplot as plt
+
 # -----------------------------------------------------------------------------
 # 1. 配置区域 (保持 Code A 原样)
 # -----------------------------------------------------------------------------
 ROBOT_IP = "192.168.1.232"
 CONFIG_NAME = "pi05_xarm_1212_night"
-CHECKPOINT_DIR = "/home/openpi/checkpoints/exp13/8000"
+CHECKPOINT_DIR = "/home/openpi/checkpoints/exp17/24000"
 VIS_SAVE_DIR = "/home/openpi/examples/xarm_real/images"
-RESULT_IMG_NAME = "0107afternoon_overcastDay_exp13_8000_test1(components C).png"
+RESULT_IMG_NAME = "0113morning_sunshineDay_exp17sub_30000_test1(components C).png"
 TASK_PROMOT = "pick up the industrial components"
 #指定要读取的点位文件
 POINTS_FILE = os.path.join(VIS_SAVE_DIR, "test_points.json")
 
 CAMERAS = {
-    "cam_left_wrist": 0,
-    "cam_right_wrist": 2
+    "cam_left_wrist": "/dev/cam_left_wrist",
+    "cam_right_wrist": "/dev/cam_right_wrist"
 }
 CROP_CONFIGS = {
     "cam_left_wrist": (118, 60, 357, 420),
@@ -50,9 +54,12 @@ JOINT_LIMITS = [
     (-3.1, 3.1), (-1.6, 1.8), (-6.2, 6.2)
 ]
 
-HOME_POS = [539.120605, 17.047951, 100-59.568863, 3.12897, 0.012689, -1.01436]
-POS_A = [539.120605, 17.047951, -69.568863, 3.12897, 0.012689, -1.01436]
-MIN_SAFE_Z = -79
+HOME_POS = [486.626923, 158.343277, 30.431152, 3.12897, 0.012689, -1.01436]
+POS_A = [486.626923, 158.343277, -79, 3.12897, 0.012689, -1.01436]
+MIN_SAFE_Z = -99
+# HOME_POS = [539.120605, 17.047951, 100-59.568863, 3.12897, 0.012689, -1.01436]
+# POS_A = [539.120605, 17.047951, -79.568863, 3.12897, 0.012689, -1.01436]
+# MIN_SAFE_Z = -99
 SLOW_DOWN_FACTOR = 3.0  
 INTERPOLATION_FREQ = 100.0 
 
@@ -70,6 +77,141 @@ FIXED_PITCH = POS_A[4]
 BASE_YAW = POS_A[5]
 YAW_RANDOM_RANGE = (-np.pi/6, np.pi/6)
 
+# -----------------------------------------------------------------------------
+# 【修复版】Docker 专用无头可视化器
+# -----------------------------------------------------------------------------
+class DebugVisualizer:
+    def __init__(self, safe_z_limit, save_dir):
+        # 增加画布高度，改为 3行 2列
+        self.fig, self.axs = plt.subplots(3, 2, figsize=(10, 12))
+        self.safe_z_limit = safe_z_limit
+        self.save_path = os.path.join(save_dir, "live_debug_status.png")
+        
+        # --- 布局定义 ---
+        # Row 1: 相机
+        self.ax_cam1 = self.axs[0, 0]
+        self.ax_cam2 = self.axs[0, 1]
+        
+        # Row 2: 空间轨迹 (左: XY平面, 右: Z高度)
+        self.ax_xy_plane = self.axs[1, 0]
+        self.ax_z = self.axs[1, 1]
+        
+        # Row 3: 数值曲线 (左: XY随时间变化, 右: 夹爪)
+        self.ax_xy_time = self.axs[2, 0]
+        self.ax_grip = self.axs[2, 1]
+        
+        # --- 初始化样式 ---
+        # 1. XY 平面 (俯视图)
+        self.ax_xy_plane.set_title("XY Trajectory (Top-Down View)")
+        self.ax_xy_plane.set_xlabel("X (mm)")
+        self.ax_xy_plane.set_ylabel("Y (mm)")
+        self.ax_xy_plane.grid(True)
+        self.ax_xy_plane.set_aspect('equal', 'datalim') # 保持比例，防止圆形变椭圆
+        
+        # 2. Z 轴
+        self.ax_z.set_title("Z Trajectory (Height)")
+        self.ax_z.set_ylabel("Z (mm)")
+        self.ax_z.axhline(y=safe_z_limit, color='r', linestyle='--', label='Limit')
+        self.ax_z.grid(True)
+        
+        # 3. XY 时间序列
+        self.ax_xy_time.set_title("X & Y over Time (Steps)")
+        self.ax_xy_time.set_ylabel("Position (mm)")
+        self.ax_xy_time.grid(True)
+        
+        # 4. 夹爪
+        self.ax_grip.set_title("Gripper Intent")
+        self.ax_grip.set_ylim(-0.1, 1.1)
+        self.ax_grip.axhline(y=0.8, color='g', linestyle='--', label='Trigger')
+        self.ax_grip.grid(True)
+
+        print(f"[Vis] Debug visualization will be saved to: {self.save_path}")
+
+    def _clear_lines(self, ax):
+        """辅助函数：安全清除图表中的线条"""
+        for line in list(ax.lines):
+            line.remove()
+        # 清除图例
+        if ax.get_legend() is not None:
+            ax.get_legend().remove()
+
+    def update(self, obs, action_chunk, robot_arm):
+        # --- 1. 绘制图像 ---
+        self.ax_cam1.clear(); self.ax_cam1.set_title("Left Wrist")
+        self.ax_cam1.imshow(obs['cam_left_wrist'])
+        self.ax_cam1.axis('off')
+        
+        self.ax_cam2.clear(); self.ax_cam2.set_title("Right Wrist")
+        self.ax_cam2.imshow(obs['cam_right_wrist'])
+        self.ax_cam2.axis('off')
+        
+        # --- 2. 计算轨迹数据 (FK) ---
+        pred_x, pred_y, pred_z = [], [], []
+        
+        for i in range(len(action_chunk)):
+            joints = action_chunk[i][:6]
+            # 计算正运动学
+            ret, pose = robot_arm.get_forward_kinematics(angles=joints, input_is_radian=True, return_is_radian=True)
+            if ret == 0: 
+                pred_x.append(pose[0])
+                pred_y.append(pose[1])
+                pred_z.append(pose[2])
+            else: 
+                # 如果解算失败，沿用上一个点或补0
+                last_x = pred_x[-1] if pred_x else 0
+                last_y = pred_y[-1] if pred_y else 0
+                last_z = pred_z[-1] if pred_z else 0
+                pred_x.append(last_x); pred_y.append(last_y); pred_z.append(last_z)
+        
+        steps = np.arange(len(pred_x)) # 时间步
+
+        # --- 3. 绘制 XY 平面轨迹 (俯视图) ---
+        self._clear_lines(self.ax_xy_plane)
+        # 画轨迹线
+        self.ax_xy_plane.plot(pred_x, pred_y, 'b-o', alpha=0.6, markersize=4, label='Path')
+        # 标记起点 (绿色) 和 终点 (红色)
+        if pred_x:
+            self.ax_xy_plane.plot(pred_x[0], pred_y[0], 'go', markersize=8, label='Start') # 起点
+            self.ax_xy_plane.plot(pred_x[-1], pred_y[-1], 'rx', markersize=8, label='End') # 终点
+            
+            # 动态调整视野，保证能看清轨迹趋势 (加一点padding)
+            mid_x, span_x = (np.min(pred_x) + np.max(pred_x))/2, (np.max(pred_x) - np.min(pred_x))
+            mid_y, span_y = (np.min(pred_y) + np.max(pred_y))/2, (np.max(pred_y) - np.min(pred_y))
+            max_span = max(span_x, span_y, 20) # 最小视野20mm
+            self.ax_xy_plane.set_xlim(mid_x - max_span, mid_x + max_span)
+            self.ax_xy_plane.set_ylim(mid_y - max_span, mid_y + max_span)
+            
+        self.ax_xy_plane.legend(loc='upper right', fontsize='small')
+
+        # --- 4. 绘制 Z 轴高度 ---
+        self._clear_lines(self.ax_z)
+        self.ax_z.axhline(y=self.safe_z_limit, color='r', linestyle='--')
+        self.ax_z.plot(steps, pred_z, 'b-o', markersize=4)
+        # 动态调整 Z 轴范围，方便看清是否贴地
+        if pred_z:
+            min_z = min(min(pred_z), self.safe_z_limit)
+            self.ax_z.set_ylim(min_z - 20, max(pred_z) + 20)
+
+        # --- 5. 绘制 XY 时间序列 (看震荡) ---
+        self._clear_lines(self.ax_xy_time)
+        self.ax_xy_time.plot(steps, pred_x, 'c--', label='X')
+        self.ax_xy_time.plot(steps, pred_y, 'm--', label='Y')
+        self.ax_xy_time.legend(loc='best', fontsize='small')
+
+        # --- 6. 绘制夹爪 ---
+        grip_vals = action_chunk[:, 6]
+        self._clear_lines(self.ax_grip)
+        self.ax_grip.axhline(y=0.8, color='g', linestyle='--')
+        self.ax_grip.plot(steps, grip_vals, 'k-x')
+
+        # --- 7. 保存图片 (Docker 兼容) ---
+        try:
+            self.fig.canvas.draw()
+            img_rgba = np.asarray(self.fig.canvas.buffer_rgba())
+            image = cv2.cvtColor(img_rgba, cv2.COLOR_RGBA2BGR)
+            cv2.imwrite(self.save_path, image)
+        except Exception as e:
+            print(f"[Vis Error] {e}")
 # -----------------------------------------------------------------------------
 # 键盘监听线程 (轻量级)
 # -----------------------------------------------------------------------------
@@ -290,24 +432,26 @@ class XArmHardware:
         # 1. 安全限位
         target_joints = [np.clip(a, l, h) for a, (l, h) in zip(action_rad[:6], JOINT_LIMITS)]
         
-        # 2. Z轴检查 (Code A 有，所以这里加上，保持物理一致)
+        # 2. Z轴检查与修正
         ret, pose = self.arm.get_forward_kinematics(angles=target_joints, input_is_radian=True, return_is_radian=True)
         if ret == 0:
             model_z = pose[2]
+            
+            # 只有当模型想去的高度 低于 安全限制时，才触发修正
             if model_z < MIN_SAFE_Z:
                 print(f"[DEBUG] Z Limit Triggered! Model wants: {model_z:.2f}, Limit: {MIN_SAFE_Z}")
-                # 只有当模型想去的比限位还低时，才进行修正
+                
+                # 构造修正后的位姿（保持XY和旋转不变，只把Z抬高到安全线）
                 safe_pose = list(pose)
                 safe_pose[2] = MIN_SAFE_Z
                 
-                
-            # if pose[2] < MIN_SAFE_Z:
-            #     safe_pose = list(pose); safe_pose[2] = MIN_SAFE_Z
+                # 重新解算关节角
                 ret_ik, ik_joints = self.arm.get_inverse_kinematics(safe_pose, input_is_radian=True, return_is_radian=True)
-                if ret_ik == 0: target_joints = list(ik_joints)
+                if ret_ik == 0: 
+                    target_joints = list(ik_joints) # 使用修正后的关节角
                 else: 
                     print("[Error] IK Failed during Z-safety adjustment")
-                    return # IK 失败跳过
+                    return # IK 失败跳过该步骤
 
         # 3. 插值运动 (Time Dilation)
         code, current_joints = self.arm.get_servo_angle(is_radian=True)
@@ -377,6 +521,8 @@ def main():
     robot = XArmHardware(ROBOT_IP, CAMERAS)
     sampler = TaskSampler(POINTS_FILE)
     viz = TaskVisualizer(VIS_SAVE_DIR, RESULT_IMG_NAME, BOUNDARY_POINTS_2D, HOME_POS)
+    debugger = DebugVisualizer(MIN_SAFE_Z, VIS_SAVE_DIR)
+
     
     # 启动后台键盘监听
     kb = KeyboardThread()
@@ -439,6 +585,8 @@ def main():
                     "state": raw_obs["state"], "prompt": TASK_PROMOT
                 })
                 action_chunk = np.array(result["actions"])
+                
+                debugger.update(raw_obs, action_chunk, robot.arm)
                 
                 # 3. 抓取检测
                 if np.any(action_chunk[:1, 6] > 0.8):

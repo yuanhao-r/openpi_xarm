@@ -42,15 +42,15 @@ class AutoDataRecorder:
 
         # --- 关键位姿定义 (单位: 毫米/弧度) ---
         self.pos_home = [539.120605, 17.047951, 100-69.568863, 3.12897, 0.012689, -1.01436]
-        self.pos_A = [539.120605, 17.047951, -60.568863, 3.12897, 0.012689, -1.01436]
+        self.pos_A = [539.120605, 17.047951, -79.568863, 3.12897, 0.012689, -1.01436]
         self.fixed_z = self.pos_A[2]  # Z轴固定为桌面高度
 
         # ===================== 2D凸包区域定义 =====================
         self.boundary_points_2d = np.array([
-            [548.982422, -66.848724],  # 左下
-            [724.302856, -66.848724],   # 右下
-            [724.232117, 240.781003], # 右上
-            [428.805481, 203.618057],  # 左上
+            [519.6, -62.5],
+            [779.8, 15.8],
+            [668.9, 370.4],
+            [406.0, 306.3],
         ])
         
         # 构建2D凸包
@@ -660,7 +660,7 @@ class AutoDataRecorder:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--ip", type=str, default="192.168.1.232", help="xArm IP")
-    parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/exp13_data_auto_queue_PutAndRecord_0107/raw", help="Output directory")
+    parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/exp13_data_auto_queue_PutAndRecord_0109/raw", help="Output directory")
     # parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/test/raw", help="Output directory")
     args = parser.parse_args()
     
@@ -670,13 +670,13 @@ if __name__ == "__main__":
     #     "cam_right_wrist": 2
     # }
     cameras = {
-        "cam_high": "/dev/cam_high",
+        # "cam_high": "/dev/cam_high",
         "cam_left_wrist": "/dev/cam_left_wrist",
         "cam_right_wrist": "/dev/cam_right_wrist"
     }
     
     my_crop_configs = {
-        'cam_high': [61, 1, 434, 479], 
+        # 'cam_high': [61, 1, 434, 479], 
         'cam_left_wrist': [118, 60, 357, 420],
         'cam_right_wrist': [136, 57, 349, 412],
     }

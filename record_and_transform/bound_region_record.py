@@ -52,11 +52,17 @@ class AutoDataRecorder:
         #     [472.610046, -116.043983], # 右上
         #     [661.338684, -41.658051],  # 左上
         # ])
+        # self.boundary_points_2d = np.array([
+        #     [505.982422, -150.631149],  # 左下
+        #     [724.302856, -66.848724],   # 右下
+        #     [724.232117, 240.781003], # 右上
+        #     [428.805481, 203.618057],  # 左上
+        # ])
         self.boundary_points_2d = np.array([
-            [505.982422, -150.631149],  # 左下
-            [724.302856, -66.848724],   # 右下
-            [724.232117, 240.781003], # 右上
-            [428.805481, 203.618057],  # 左上
+            [528.6, 13.5],
+            [726.8, 154.8],
+            [626.9, 431.4],
+            [406.0, 306.3],
         ])
         
   
@@ -614,8 +620,8 @@ class AutoDataRecorder:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--ip", type=str, default="192.168.1.232", help="xArm IP")
-    parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/exp10_data_auto_queue_PutAndRecord_1229/raw", help="Output directory")
-    # parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/test/raw", help="Output directory")
+    # parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/exp10_data_auto_queue_PutAndRecord_1229/raw", help="Output directory")
+    parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/test/raw", help="Output directory")
     args = parser.parse_args()
     
     cameras = {

@@ -68,7 +68,7 @@ def create_dataset(repo_id, root_dir, robot_type="xarm", incremental=False):
     }
     
     # 摄像头配置
-    cameras = ["cam_high", "cam_left_wrist", "cam_right_wrist"]
+    cameras = ["cam_left_wrist", "cam_right_wrist"]
     for cam in cameras:
         H, W = image_resolution
         features[f"observation.images.{cam}"] = {
@@ -160,7 +160,7 @@ def load_episode_data(episode_dir):
     # ========== 3. 修复图像加载逻辑：精准统计所有.jpg文件 ==========
     import re  # 用于提取文件名中的数字
     images = {}
-    cameras = ["cam_high", "cam_left_wrist", "cam_right_wrist"]
+    cameras = ["cam_left_wrist", "cam_right_wrist"]
     
     # ... 加载data.jsonl后 ...
     # 提取所有frame_idx，确定目标数量
@@ -294,7 +294,7 @@ def convert_single_episode(episode_dir, dataset, sample_data_list):
         }
         
         # 处理每个摄像头的图像（兼容缺失情况）
-        cameras = ["cam_high", "cam_left_wrist", "cam_right_wrist"]
+        cameras = ["cam_left_wrist", "cam_right_wrist"]
         for cam in cameras:
             cam_imgs = images.get(cam, np.array([]))
             # 图像缺失/索引越界：用空图像填充
@@ -372,7 +372,8 @@ def incremental_convert(raw_dir, repo_id, output_dir):
                     continue
                 
                 # 2. 检查图像目录是否存在且写入完成
-                cam_dir = d / "images" / "cam_high"
+                # cam_dir = d / "images" / "cam_high"
+                cam_dir = d / "images" / "cam_left_wrist"
                 if not cam_dir.exists():
                     continue
                 # 取最后一张图像的修改时间（验证写入完成）
@@ -447,7 +448,7 @@ def verify_converted_data(output_dir, repo_id):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--raw-dir", type=str, 
-                        default="/home/openpi/data/data_raw/exp15_data_auto_queue_PutAndRecord_0108/raw", 
+                        default="/home/openpi/data/data_raw/exp18_data_auto_queue_PutAndRecord_0112/raw", 
                         help="原始数据目录")
     # parser.add_argument("--raw-dir", type=str, 
     #                     default="/home/openpi/data/data_raw/test/raw", 
@@ -456,7 +457,7 @@ if __name__ == "__main__":
                         default="xarm_autoPut_pi05_dataset", 
                         help="数据集名称")
     parser.add_argument("--output-dir", type=str, 
-                        default="/home/openpi/data/data_converted/exp16_lerobot_autoPut_data_0108afternoon_224_224", 
+                        default="/home/openpi/data/data_converted/exp18_lerobot_autoPut_data_0112night_224_224", 
                         help="输出目录")
     parser.add_argument("--scan-interval", type=int, default=5, 
                         help="扫描新增episode的间隔（秒）")

@@ -31,10 +31,11 @@ import matplotlib.pyplot as plt
 # -----------------------------------------------------------------------------
 ROBOT_IP = "192.168.1.232"
 CONFIG_NAME = "pi05_xarm_1212_night"
-CHECKPOINT_DIR = "/home/openpi/checkpoints/exp19/4000"
+CHECKPOINT_DIR = "/home/openpi/checkpoints/exp22/16000"
 VIS_SAVE_DIR = "/home/openpi/examples/xarm_real/images"
-RESULT_IMG_NAME = "0114morning_sunshineDay_exp19_4000_test1(components C).png"
-TASK_PROMOT = "pick up the industrial components"
+RESULT_IMG_NAME = "0119morning_rainDay_exp22_16000_test5(components B).png"
+# TASK_PROMOT = "pick up the industrial components"
+TASK_PROMOT = "pick up the silver metal cylinder"
 #指定要读取的点位文件
 POINTS_FILE = os.path.join(VIS_SAVE_DIR, "test_points.json")
 
@@ -54,21 +55,21 @@ JOINT_LIMITS = [
     (-3.1, 3.1), (-1.6, 1.8), (-6.2, 6.2)
 ]
 
-HOME_POS = [486.626923, 158.343277, 30.431152, 3.12897, 0.012689, -1.01436]
-POS_A = [486.626923, 158.343277, -79, 3.12897, 0.012689, -1.01436]
+HOME_POS = [486.626923, 297.343277, 30.431152, 3.12897, 0.012689, -1.01436]
+POS_A = [486.626923, 297.343277, -79, 3.12897, 0.012689, -1.01436]
 MIN_SAFE_Z = -99
 # HOME_POS = [539.120605, 17.047951, 100-59.568863, 3.12897, 0.012689, -1.01436]
 # POS_A = [539.120605, 17.047951, -79.568863, 3.12897, 0.012689, -1.01436]
 # MIN_SAFE_Z = -99
-SLOW_DOWN_FACTOR = 1.0  
+SLOW_DOWN_FACTOR = 4.0  
 INTERPOLATION_FREQ = 100.0 
 
 # exp9 boundary
 BOUNDARY_POINTS_2D = np.array([
-   [505.982422, -150.631149],
-   [712.302856, -66.848724],
-   [697.232117, 163.981003],
-   [466.805481, 144.618057],
+    [528.6, 13.5],
+    [780.6, 181.2],
+    [606.9, 502.4],
+    [364.1,370.0],
 ])
 
 FIXED_Z = POS_A[2]
@@ -153,6 +154,8 @@ class DebugVisualizer:
         curr_x, curr_y, curr_z = curr_pose[0], curr_pose[1], curr_pose[2]
         # --- 2. 计算轨迹数据 (FK) ---
         pred_x, pred_y, pred_z = [], [], []
+        # 记录起始点的绝对坐标
+        start_x, start_y, start_z = curr_x, curr_y, curr_z
         # 累计推演
         sim_x, sim_y, sim_z = curr_x, curr_y, curr_z
         for i in range(len(action_chunk)):
@@ -161,14 +164,13 @@ class DebugVisualizer:
             dy = action_chunk[i][1] * 1000.0
             dz = action_chunk[i][2] * 1000.0
             
-            sim_x += dx
-            sim_y += dy
-            sim_z += dz
+            cur_pred_x = start_x + dx
+            cur_pred_y = start_y + dy
+            cur_pred_z = start_z + dz
             
-            pred_x.append(sim_x)
-            pred_y.append(sim_y)
-            pred_z.append(sim_z)
-            
+            pred_x.append(cur_pred_x)
+            pred_y.append(cur_pred_y)
+            pred_z.append(cur_pred_z)
         
        
         steps = np.arange(len(pred_x)) # 时间步
@@ -441,7 +443,48 @@ class XArmHardware:
         obs["state"] = np.append(joints_rad[:6], self.current_gripper_state)
         return obs
 
-    
+    def recover_from_error(self):
+        """
+        当机械臂报错 (如 code=9, code=31 等) 时，自动执行恢复序列。
+        """
+        print("\n[Recovery] !!! 检测到硬件错误，启动自动恢复程序...")
+        
+        if self.arm is None:
+            return
+
+        # 1. 强制停止当前所有运动
+        self.arm.set_state(4) 
+        time.sleep(0.5)
+
+        # 2. 清除错误和警告
+        self.arm.clean_error()
+        self.arm.clean_warn()
+        time.sleep(0.5)
+
+        # 3. 重新使能电机 (如果是因为碰撞导致的掉使能)
+        self.arm.motion_enable(enable=True)
+        time.sleep(0.5)
+
+        # 4. 重新设置运动模式
+        # 注意：如果你之前在用伺服模式(set_servo_angle_j)，需要根据你的场景
+        # 重新设为模式 1 (Servo Mode) 或 模式 0 (Normal Pose Mode)
+        # 这里建议先设为 0 以确保安全，然后再切回你需要的模式
+        self.arm.set_mode(0) 
+        self.arm.set_state(0)
+        time.sleep(0.5)
+
+        # 5. 检查是否恢复成功
+        code, state = self.arm.get_state()
+        err_code = self.arm.get_err_warn_code()
+        
+        if err_code[0] == 0:
+            print("[Recovery] 成功清除错误，机械臂已恢复就绪。")
+            # 如果你后续仍需使用伺服控制模式，需在此切回 mode 1
+            # self.arm.set_mode(1)
+            # self.arm.set_state(0)
+        else:
+            print(f"[Recovery] 恢复失败！当前错误码: {err_code[0]}。可能需要人工干预。")
+        
     def execute_action(self, action_delta):
         """
         执行单步动作 (Cartesian Delta Mode)
@@ -468,8 +511,9 @@ class XArmHardware:
         ik_target_pose[:3] *= 1000.0 # 转回 mm
         
         # 5. IK 解算
-        ret, target_joints = self.arm.get_inverse_kinematics(ik_target_pose, input_is_radian=True, return_is_radian=True)
-        
+        # ret, target_joints = self.arm.get_inverse_kinematics(ik_target_pose, input_is_radian=True, return_is_radian=True)
+        # 改进一下
+        ret, target_joints, actual_target_pose = self.find_reachable_ik(curr_pose, target_pose)
         if ret == 0:
             # 6. 插值执行 (保持你原有的平滑逻辑)
             _, curr_joints_raw = self.arm.get_servo_angle(is_radian=True)
@@ -510,6 +554,35 @@ class XArmHardware:
         if target_gripper > 0.8: self.close_gripper()
         elif target_gripper < 0.2: self.open_gripper()
         
+    def find_reachable_ik(self, start_pose, end_pose, search_steps=5):
+        """
+        如果在 end_pose IK 失败，则在 start 和 end 之间二分查找最近的可达点。
+        """
+        # 转换为 mm 以便 SDK 计算
+        def get_ik(p):
+            ik_p = p.copy()
+            ik_p[:3] *= 1000.0
+            return self.arm.get_inverse_kinematics(ik_p, input_is_radian=True, return_is_radian=True)
+
+        # 1. 首先尝试原始目标
+        ret, joints = get_ik(end_pose)
+        if ret == 0:
+            return ret, joints, end_pose
+
+        # 2. 如果失败，尝试寻找“折中点”
+        # 在当前位姿和目标位姿之间进行线性插值，从 0.8, 0.6, 0.4... 比例尝试
+        print(f"[Warning] Original IK Failed. Searching for nearest reachable point...")
+        
+        # 尝试比例：0.75, 0.5, 0.25
+        for ratio in [0.75, 0.5, 0.25, 0.1]:
+            temp_pose = start_pose + (end_pose - start_pose) * ratio
+            ret, joints = get_ik(temp_pose)
+            if ret == 0:
+                print(f"[Recovery] Found reachable point at {ratio*100:.0f}% of original step.")
+                return ret, joints, temp_pose
+
+        return -1, None, None
+            
         
     # # 【还原】完全恢复 Code A 的执行逻辑，去掉所有额外检测
     # def execute_action(self, action_rad):
