@@ -31,14 +31,65 @@ import matplotlib.pyplot as plt
 # -----------------------------------------------------------------------------
 ROBOT_IP = "192.168.1.232"
 CONFIG_NAME = "pi05_xarm_1212_night"
-CHECKPOINT_DIR = "/home/openpi/checkpoints/exp22/16000"
+CHECKPOINT_DIR = "/home/openpi/checkpoints/exp23/24000"
 VIS_SAVE_DIR = "/home/openpi/examples/xarm_real/images"
-RESULT_IMG_NAME = "0119morning_rainDay_exp22_16000_test5(components B).png"
+# RESULT_IMG_NAME = "0121mafternoon_cloudyDay_exp22_36000_test20_components E23.png"
 # TASK_PROMOT = "pick up the industrial components"
-TASK_PROMOT = "pick up the silver metal cylinder"
+TASK_PROMOT = "pick up the small upright valve "
+SELECTED_TASK = "D"  
+# --- 任务配置字典 ---
+TASK_CONFIGS = {
+    "A": {
+        "prompt": "pick up the hollow rectangular housing",
+        "z": -65
+    },
+    "B": {
+        "prompt": "pick up the silver metal cylinder",
+        "z": -65
+    },
+    "C": {
+        "prompt": "pick up the small upright valve",
+        "z": -79
+    },
+    "D": {
+        "prompt": "pick up the flat triangular plate",
+        "z": -65
+    },
+    "E": {
+        "prompt": "pick up the silver metal cylinder",
+        "z": -65
+    },
+    "F": {
+        "prompt": "pick up the flat circular plate",
+        "z": -103
+    },
+    "G": {
+        "prompt": "pick up the flat circular plate",
+        "z": -109
+    }
+}
+# 获取当前任务的配置
+current_config = TASK_CONFIGS[SELECTED_TASK]
+OBJECT_Z = current_config["z"]
+# 设置提示词
+TASK_PROMOT = current_config["prompt"]
+# 基础坐标 (X, Y, Roll, Pitch, Yaw)
+_base_x = 554.626923
+_base_y = 361.343277
+_base_r = 3.12897
+_base_p = 0.012689
+_base_yw = -1.01436
+# 组装 POS_A (动态填入对应的 Z 值)
+POS_A = [_base_x, _base_y, current_config["z"], _base_r, _base_p, _base_yw]
+# 自动生成结果图片文件名 (避免手动改名)
+RESULT_IMG_NAME = f"0127afternoon_cloudyDay_exp23_24000_test2_components_{SELECTED_TASK}.png"
+print(f">>> 当前任务: [{SELECTED_TASK}]")
+print(f">>> Prompt: {TASK_PROMOT}")
+print(f">>> POS_A Z-height: {POS_A[2]}")
 #指定要读取的点位文件
 POINTS_FILE = os.path.join(VIS_SAVE_DIR, "test_points.json")
-
+RESUME_TESTING = True # 开关：是否开启断点续测
+PROGRESS_FILE = os.path.join(VIS_SAVE_DIR, "test_progress.json") # 进度文件路径
 CAMERAS = {
     "cam_left_wrist": "/dev/cam_left_wrist",
     "cam_right_wrist": "/dev/cam_right_wrist"
@@ -55,22 +106,29 @@ JOINT_LIMITS = [
     (-3.1, 3.1), (-1.6, 1.8), (-6.2, 6.2)
 ]
 
-HOME_POS = [486.626923, 297.343277, 30.431152, 3.12897, 0.012689, -1.01436]
-POS_A = [486.626923, 297.343277, -79, 3.12897, 0.012689, -1.01436]
-MIN_SAFE_Z = -99
+# HOME_POS = [486.626923, 297.343277, 30.431152, 3.12897, 0.012689, -1.01436]
+# POS_A = [486.626923, 297.343277, -65, 3.12897, 0.012689, -1.01436]
+HOME_POS = [554.626923, 361.343277, 30.431152, 3.12897, 0.012689, -1.01436]
+# POS_A = [554.626923, 361.343277, -79, 3.12897, 0.012689, -1.01436]
+MIN_SAFE_Z = -119
 # HOME_POS = [539.120605, 17.047951, 100-59.568863, 3.12897, 0.012689, -1.01436]
 # POS_A = [539.120605, 17.047951, -79.568863, 3.12897, 0.012689, -1.01436]
 # MIN_SAFE_Z = -99
-SLOW_DOWN_FACTOR = 4.0  
+SLOW_DOWN_FACTOR = 2.0  
 INTERPOLATION_FREQ = 100.0 
 
 # exp9 boundary
 BOUNDARY_POINTS_2D = np.array([
-    [528.6, 13.5],
-    [780.6, 181.2],
-    [606.9, 502.4],
-    [364.1,370.0],
+    [528.6, 126.5],
+    [745.0, 250.2],
+    [501.9, 539.4],
+    [338.1, 425.0],
 ])
+# 计算宽松边界 (Relaxed Boundary)
+# 以中心点为基准，向外扩张 1.1 倍 (即允许超出 10%)
+# 1.15 表示允许向外扩 15% 的范围，你可以根据实际桌子大小调整这个系数
+_center_point = np.mean(BOUNDARY_POINTS_2D, axis=0)
+BOUNDARY_EXPANDED = _center_point + (BOUNDARY_POINTS_2D - _center_point) * 1.15
 
 FIXED_Z = POS_A[2]
 FIXED_ROLL = POS_A[3]
@@ -78,6 +136,179 @@ FIXED_PITCH = POS_A[4]
 BASE_YAW = POS_A[5]
 YAW_RANDOM_RANGE = (-np.pi/6, np.pi/6)
 
+
+class MetricsRecorder:
+    def __init__(self):
+        self.episode_metrics = []
+        self.current_episode = {}
+        
+    def start_episode(self, start_pose_abs, ground_truth_pose):
+        """
+        开始记录一轮测试
+        :param start_pose_abs: 机械臂起始的绝对坐标 [x, y, z, r, p, y] (单位: 米)
+        :param ground_truth_pose: JSON文件里的目标坐标 [x, y, z, r, p, y] (单位: 毫米)
+        """
+        self.current_episode = {
+            "start_time": time.time(),
+            # 统一转换为毫米 (mm) 存储，方便计算
+            "start_pose": np.array(start_pose_abs) * 1000.0, 
+            "ground_truth_pose": np.array(ground_truth_pose), # 假设 JSON 里是 mm
+            "trajectory": [], 
+            "success": False,
+            "steps": 0
+        }
+        # 记录起点
+        self.current_episode["trajectory"].append(self.current_episode["start_pose"][:3])
+        # =======================================================
+        # 初始化 final_pos_mm 和 final_rpy_rad
+        # 即使一步没走，当前的最终位置就是起始位置
+        # =======================================================
+        self.current_episode["final_pos_mm"] = self.current_episode["start_pose"][:3]
+        self.current_episode["final_rpy_rad"] = start_pose_abs[3:]
+    def step(self, current_pose_abs):
+        """记录每一步的实际位置 (输入单位: 米)"""
+        # 转为 mm 存储
+        pos_mm = np.array(current_pose_abs[:3]) * 1000.0
+        self.current_episode["trajectory"].append(pos_mm)
+        self.current_episode["steps"] += 1
+        
+        # 实时更新最终位姿 (以最后一步为准)
+        # 同时记录最后一步的旋转 (Roll, Pitch, Yaw) 用于算角度误差
+        self.current_episode["final_full_pose"] = np.array(current_pose_abs) * 1000.0 # [x,y,z, r,p,y]
+        # 注意：r,p,y 这里也被乘了1000，后面计算时要还原回去，或者分开处理
+        # 修正：我们分开存
+        self.current_episode["final_pos_mm"] = pos_mm
+        self.current_episode["final_rpy_rad"] = current_pose_abs[3:]
+
+    def end_episode(self, success, close_gripper_time):
+        # self.current_episode["end_time"] = time.time()
+        self.current_episode["end_time"] = close_gripper_time
+        self.current_episode["success"] = success
+        
+        # 计算该轮指标
+        metrics = self._calculate_single_metrics(self.current_episode)
+        self.episode_metrics.append(metrics)
+        return metrics
+
+    def _calculate_single_metrics(self, data):
+        # 1. 耗时
+        duration = data["end_time"] - data["start_time"]
+        
+        # 2. 轨迹平滑度 (Jerk)
+        traj = np.array(data["trajectory"]) # (T, 3) mm
+        if len(traj) > 3:
+            vel = np.diff(traj, axis=0)
+            acc = np.diff(vel, axis=0)
+            jerk = np.diff(acc, axis=0)
+            avg_jerk = np.mean(np.linalg.norm(jerk, axis=1))
+        else:
+            avg_jerk = 0.0
+
+        # 3. 步数效率 (基于起始点到理论目标点的距离)
+        # Distance (Start -> Ground Truth)
+        gt_pos = data["ground_truth_pose"][:3]
+        start_pos = data["start_pose"][:3]
+        dist_xy = np.linalg.norm(gt_pos[:2] - start_pos[:2])
+        dist_z = abs(gt_pos[2] - start_pos[2])
+        ideal_path_len = dist_xy + dist_z # mm
+        
+        # 定义“标准步长” 在训练数据集中，每一步(0.1s)平均移动多少毫米
+        REF_STEP_LEN_MM = 5.0 
+        
+                
+        # 假设理论速度 100mm/s, 10Hz -> 10mm/step
+        # 避免除以0
+        opt_steps = max(1, int(ideal_path_len / REF_STEP_LEN_MM))
+        step_ratio = data["steps"] / opt_steps
+
+        # 4. 最终误差 (核心指标)
+        final_pos = data["final_pos_mm"]
+        
+        # A. 位置误差 (mm)
+        pos_error = np.linalg.norm(final_pos - gt_pos)
+        
+        # B. 角度误差 (degree)
+        # Ground Truth 的 RPY (假设 JSON 后三位是 rad)
+        gt_rpy = data["ground_truth_pose"][3:] 
+        final_rpy = data["final_rpy_rad"]
+        
+        # 简单计算 RPY 的欧氏距离作为误差参考 (更严谨可以用四元数)
+        # 将弧度转为角度计算差值
+        diff_rpy_deg = np.degrees(np.abs(final_rpy - gt_rpy))
+        # 处理周期性 (例如 359度 和 1度 差2度) - 简单场景可忽略，这里做个简化求和
+        rot_error = np.sum(diff_rpy_deg) # 累计角度误差
+
+        return {
+            "success": 1.0 if data["success"] else 0.0,
+            "time": duration,
+            "jerk": avg_jerk,
+            "step_ratio": step_ratio,
+            "pos_error": pos_error,
+            "rot_error": rot_error,
+            "opt_steps": opt_steps  
+        }
+
+    def print_summary(self):
+        if not self.episode_metrics:
+            print("No metrics data.")
+            return
+
+        N = len(self.episode_metrics)
+        total_episodes = len(self.episode_metrics)
+        success_list = [m for m in self.episode_metrics if m["success"] == 1.0]
+        num_success = len(success_list)
+        avg_success = (num_success / total_episodes) * 100.0
+        # 3. 计算其他指标 (仅基于成功案例)
+        if num_success > 0:
+            avg_time = np.mean([m["time"] for m in success_list])
+            avg_jerk = np.mean([m["jerk"] for m in success_list])
+            avg_step_ratio = np.mean([m["step_ratio"] for m in success_list])
+            avg_pos_error = np.mean([m["pos_error"] for m in success_list])
+            avg_rot_error = np.mean([m["rot_error"] for m in success_list])
+            
+            # 也可以算一下标准差(std)看稳定性，这里先只展示均值
+        else:
+            # 如果一次都没成功，其他指标没有意义
+            avg_time = 0.0
+            avg_jerk = 0.0
+            avg_step_ratio = 0.0
+            avg_pos_error = 0.0
+            avg_rot_error = 0.0
+            
+        # avg_success = np.mean([m["success"] for m in self.episode_metrics]) * 100.0
+        # avg_time = np.mean([m["time"] for m in self.episode_metrics])
+        # avg_jerk = np.mean([m["jerk"] for m in self.episode_metrics])
+        # avg_step_ratio = np.mean([m["step_ratio"] for m in self.episode_metrics])
+        # avg_pos_error = np.mean([m["pos_error"] for m in self.episode_metrics])
+        # avg_rot_error = np.mean([m["rot_error"] for m in self.episode_metrics])
+
+        if num_success > 0:
+            print("\n" + "="*60)
+            print(f"📊 量化测试报告 (已测: {N} 轮)")
+            print("="*60)
+            print(f"✅ 成功率 (Success Rate):     {avg_success:.1f}%")
+            print(f"🎯 平均位置误差 (Pos Error): {avg_pos_error:.2f} mm")
+            print(f"📐 平均角度误差 (Rot Error): {avg_rot_error:.2f} deg")
+            print(f"⏱️ 平均耗时 (Time):          {avg_time:.2f} s")
+            print(f"👣 步数比 (Actual/Optimal):   {avg_step_ratio:.2f}")
+            print(f"📉 轨迹平滑度 (Jerk):        {avg_jerk:.4f}")
+            print("="*60 + "\n")
+        else:
+            print("-" * 40)
+            print("  [无成功案例，无法计算性能指标]")
+            
+    def print_current_metrics(self, metrics):
+        """打印当前这一轮的详细指标"""
+        status_str = "✅ Success" if metrics["success"] == 1.0 else "❌ Failure"
+        
+        print("-" * 40)
+        print(f"📝 本轮详细数据 ({status_str})")
+        print(f"   ⏱️ 耗时:       {metrics['time']:.2f} s")
+        print(f"   🎯 位置误差:   {metrics['pos_error']:.2f} mm")
+        print(f"   📐 角度误差:   {metrics['rot_error']:.2f} deg")
+        print(f"   👣 步数比:     {metrics['step_ratio']:.2f} (Opt: {metrics['opt_steps']:.0f})")
+        print(f"   📉 平滑度:     {metrics['jerk']:.4f}")
+        print("-" * 40)
 # -----------------------------------------------------------------------------
 # 【修复版】Docker 专用无头可视化器
 # -----------------------------------------------------------------------------
@@ -304,29 +535,102 @@ class TaskVisualizer:
             print(f"[Error] Failed to save image: {e}")
 
 class TaskSampler:
-    def __init__(self, json_path):
+    def __init__(self, json_path, progress_file=None, resume=False):
+        """
+        :param json_path: 原始完整测试点文件 (test_points.json)
+        :param progress_file: 进度记录文件路径 (test_progress.json)
+        :param resume: 是否尝试从进度文件恢复
+        """
+        self.original_json_path = json_path
+        self.progress_file = progress_file
+        
         if not os.path.exists(json_path):
             raise FileNotFoundError(f"找不到点位文件: {json_path}。请先运行生成脚本。")
         
         with open(json_path, 'r') as f:
             data = json.load(f)
-
+            # 原始全集（顺序必须固定）
+            self.all_points_original = data["grid"] + data["boundary"]
+        # 2. 处理断点恢复逻辑
+        if resume and progress_file and os.path.exists(progress_file):
+            print(f"[Sampler] 发现进度文件: {progress_file}，尝试恢复...")
+            try:
+                with open(progress_file, 'r') as f:
+                    progress_data = json.load(f)
+                
+                # 读取剩余点列表
+                self.remaining_points = progress_data.get("remaining_points", [])
+                self.completed_count = progress_data.get("completed_count", 0)
+                
+                # 校验一下 (可选)
+                if not self.remaining_points and self.completed_count > 0:
+                    print("[Sampler] ⚠️ 进度文件显示所有点已测试完毕！")
+                else:
+                    print(f"[Sampler] ✅ 成功恢复进度。已测: {self.completed_count}, 剩余: {len(self.remaining_points)}")
+            except Exception as e:
+                print(f"[Sampler] ❌ 读取进度文件失败 ({e})，将重置为全部测试点。")
+                self.remaining_points = list(self.all_points_original)
+                self.completed_count = 0
+        else:
+            # 不续测，或者没有进度文件 -> 重置
+            print("[Sampler] 初始化新测试序列...")
+            self.remaining_points = list(self.all_points_original)
+            self.completed_count = 0
+        
+            # 如果开启了续测模式但文件不存在，立刻创建一个初始状态
+            if resume and progress_file:
+                self.save_progress()
+        self.total_original_count = len(self.all_points_original)
+        self.current_target = None
+                
         # 将 Grid 和 Boundary 的点合并成一个列表，按顺序执行
         # 如果你想先测 Boundary，可以把顺序反过来
-        self.all_points = data["grid"] + data["boundary"]
-        self.total_count = len(self.all_points)
+        # self.all_points = data["grid"] + data["boundary"]
+        # self.total_count = len(self.all_points)
         self.current_idx = 0
         
-        print(f"[Sampler] Loaded {self.total_count} points (Grid + Boundary).")
+        print(f"[Sampler] Loaded {self.total_original_count} points (Grid + Boundary).")
     
     def get_next_target(self):
-        """获取下一个点，如果测完了返回 None"""
-        if self.current_idx < self.total_count:
-            pose = self.all_points[self.current_idx]
-            self.current_idx += 1
-            return pose, self.current_idx, self.total_count
-        return None, -1, self.total_count
+        """获取下一个点，并从剩余列表中移除"""
+        if not self.remaining_points:
+            return None, self.completed_count, self.total_original_count
+        # 取出第一个
+        self.current_target = self.remaining_points[0]
+        self.current_target[2] = OBJECT_Z
+        
+        # 返回 (pose, 当前是第几个, 总数)
+        # 注意：这里 idx 返回的是 "这是第几个被测的"，方便显示进度
+        return self.current_target, self.completed_count + 1, self.total_original_count
+        # if self.current_idx < self.total_count:
+        #     pose = self.all_points[self.current_idx]
+        #     self.current_idx += 1
+        #     return pose, self.current_idx, self.total_count
+        # return None, -1, self.total_count
     
+    def mark_current_done(self):
+        """确认当前点测试完成，保存进度"""
+        if self.remaining_points:
+            # 移除已完成的点 (就是列表第一个)
+            self.remaining_points.pop(0)
+            self.completed_count += 1
+            self.save_progress()
+    def save_progress(self):
+        """将当前剩余点列表写入磁盘"""
+        if not self.progress_file: return
+        
+        data = {
+            "completed_count": self.completed_count,
+            "remaining_points": self.remaining_points
+        }
+        
+        #为了安全，先写临时文件再重命名
+        temp_file = self.progress_file + ".tmp"
+        with open(temp_file, 'w') as f:
+            json.dump(data, f, indent=4)
+        os.replace(temp_file, self.progress_file)
+        print(f"[Sampler] 进度已保存 ({len(self.remaining_points)} left)")
+         
     def _generate_boundary_path(self, vertices, step_size):
         path = []
         num_v = len(vertices)
@@ -443,54 +747,61 @@ class XArmHardware:
         obs["state"] = np.append(joints_rad[:6], self.current_gripper_state)
         return obs
 
-    def recover_from_error(self):
+    def recover_from_error(self, target_mode=0):
         """
-        当机械臂报错 (如 code=9, code=31 等) 时，自动执行恢复序列。
+        target_mode: 恢复后希望进入的模式。
+        0: 位置模式 (用于 move_to)
+        1: 伺服模式 (用于 set_servo_angle_j / 实时推理执行)
         """
-        print("\n[Recovery] !!! 检测到硬件错误，启动自动恢复程序...")
+        print(f"\n[Recovery] !!! 启动自动恢复程序，目标模式: {target_mode}")
         
-        if self.arm is None:
-            return
+        if self.arm is None: return
 
-        # 1. 强制停止当前所有运动
-        self.arm.set_state(4) 
-        time.sleep(0.5)
-
-        # 2. 清除错误和警告
+        # 1. 停止并清除错误 (这一步不分模式)
+        self.arm.set_state(4)
+        time.sleep(0.2)
         self.arm.clean_error()
         self.arm.clean_warn()
-        time.sleep(0.5)
+        time.sleep(0.2)
 
-        # 3. 重新使能电机 (如果是因为碰撞导致的掉使能)
+        # 2. 重新使能
         self.arm.motion_enable(enable=True)
         time.sleep(0.5)
 
-        # 4. 重新设置运动模式
-        # 注意：如果你之前在用伺服模式(set_servo_angle_j)，需要根据你的场景
-        # 重新设为模式 1 (Servo Mode) 或 模式 0 (Normal Pose Mode)
-        # 这里建议先设为 0 以确保安全，然后再切回你需要的模式
-        self.arm.set_mode(0) 
+        # 3. 关键：正确切换模式
+        # 先 set_mode，再 set_state
+        self.arm.set_mode(target_mode)
+        time.sleep(0.2)
         self.arm.set_state(0)
-        time.sleep(0.5)
-
-        # 5. 检查是否恢复成功
-        code, state = self.arm.get_state()
-        err_code = self.arm.get_err_warn_code()
         
-        if err_code[0] == 0:
-            print("[Recovery] 成功清除错误，机械臂已恢复就绪。")
-            # 如果你后续仍需使用伺服控制模式，需在此切回 mode 1
-            # self.arm.set_mode(1)
-            # self.arm.set_state(0)
-        else:
-            print(f"[Recovery] 恢复失败！当前错误码: {err_code[0]}。可能需要人工干预。")
+        # 增加一个检查循环，确保模式切换成功后再退出函数
+        # 这样可以避免退出函数后立刻执行 API 导致的 mode incorrect 警告
+        for i in range(10):
+            # 检查 SDK 缓存的模式是否已更新
+            if self.arm.mode == target_mode:
+                break
+            time.sleep(0.1)
+        
+        if target_mode == 1:
+            # 如果要回到伺服模式，先确保它在模式 0 下稍微往上抬一点，脱离碰撞点
+            self.arm.set_mode(0)
+            self.arm.set_state(0)
+            curr_pos = self.arm.get_position()[1]
+            curr_pos[2] += 20.0 # 向上抬 20mm
+            self.arm.set_position(*curr_pos, wait=True)
+            
+            # 抬升完后再切换到推理所需的模式 1
+            self.arm.set_mode(1)
+            self.arm.set_state(0)
+
+        print(f"[Recovery] 恢复完成，当前模式: {self.arm.mode}")
         
     def execute_action(self, action_delta):
         """
         执行单步动作 (Cartesian Delta Mode)
         action_delta: [dx, dy, dz, dRx, dRy, dRz, gripper] (单位: 米, 弧度)
         """
-        print(f"[Debug] Action Delta: {action_delta[:3]}")
+        # print(f"[Debug] Action Delta: {action_delta[:3]}")
         # 1. 获取当前绝对位姿 (米)
         curr_pose = self.get_current_cartesian()
         
@@ -525,10 +836,10 @@ class XArmHardware:
             targ_j = np.array(target_joints[:6])
             
             diff = np.max(np.abs(np.array(curr_j[:6]) - np.array(target_joints[:6])))
-            print(f"[Debug] Max Joint Jump: {diff:.4f} rad")
-            if diff > 0.5: # 如果一步跳变超过 0.5 弧度 (约30度)
+            # print(f"[Debug] Max Joint Jump: {diff:.4f} rad")
+            if diff > 6.28: # 如果一步跳变超过 0.5 弧度 (约30度)
                 print("!!! DANGER: Joint jump too large! Stop!")
-                return # 拒绝执行
+                return False # 拒绝执行
             
             duration = (1.0 / CONTROL_FREQ) * SLOW_DOWN_FACTOR
             steps = int(duration * INTERPOLATION_FREQ)
@@ -542,17 +853,20 @@ class XArmHardware:
                 # 如果发送指令失败 (比如 code=9)
                 if ret != 0:
                     print(f"[Hardware Error] set_servo_angle_j failed, code={ret}. Trying to recover...")
-                    self.recover_from_error() # 调用恢复函数
-                    return # 这一步动作跳过
+                    self.recover_from_error(target_mode=1) # 恢复后直接切回模式 1
+                    return False # 这一步动作跳过
                 
                 time.sleep(1.0 / INTERPOLATION_FREQ)
         else:
             print("[Error] IK Failed. Target unreachable.")
+            return False
 
         # 7. 夹爪
         target_gripper = action_delta[6]
         if target_gripper > 0.8: self.close_gripper()
         elif target_gripper < 0.2: self.open_gripper()
+        
+        return True
         
     def find_reachable_ik(self, start_pose, end_pose, search_steps=5):
         """
@@ -652,7 +966,7 @@ class XArmHardware:
         try:
             self.arm.set_position(*pose_A_up, speed=300, wait=True, is_radian=True)
             self.arm.set_position(*POS_A, speed=300, wait=True, is_radian=True)
-            
+            self.open_gripper(); time.sleep(2.0)
             self.close_gripper(); time.sleep(2.0)
             self.arm.set_position(*pose_A_up, speed=300, wait=True, is_radian=True)
             self.move_home_scripted()
@@ -666,6 +980,23 @@ class XArmHardware:
     def close(self):
         self.arm.disconnect()
         for cap in self.caps.values(): cap.release()
+        
+    def is_in_boundary(self, pose_mm, boundary_points):
+        """
+        检查笛卡尔坐标(mm)是否在2D凸包范围内
+        pose_mm: [x, y, z, ...]
+        """
+        # 提取 XY
+        pt = (float(pose_mm[0]), float(pose_mm[1]))
+        
+        # 转换为 OpenCV 需要的 contour 格式 (int)
+        # 注意：boundary_points_2d 是 float，这里为了 pointPolygonTest 最好保持精度
+        # pointPolygonTest 支持 float 输入，但 contour 最好是 float32
+        contour = boundary_points.astype(np.float32)
+        
+        # measureDist=False, 返回 +1(内), -1(外), 0(边)
+        result = cv2.pointPolygonTest(contour, pt, False)
+        return result >= 0
 
 # -----------------------------------------------------------------------------
 # 主程序
@@ -676,13 +1007,16 @@ def main():
     policy = policy_config.create_trained_policy(config, CHECKPOINT_DIR)
     
     robot = XArmHardware(ROBOT_IP, CAMERAS)
-    sampler = TaskSampler(POINTS_FILE)
+    sampler = TaskSampler(POINTS_FILE, progress_file=PROGRESS_FILE, resume=RESUME_TESTING)
     viz = TaskVisualizer(VIS_SAVE_DIR, RESULT_IMG_NAME, BOUNDARY_POINTS_2D, HOME_POS)
     debugger = DebugVisualizer(MIN_SAFE_Z, VIS_SAVE_DIR)
+    recorder = MetricsRecorder()
 
     # 启动后台键盘监听
     kb = KeyboardThread()
     kb.start()
+    # 暂停标志位初始化
+    pause_requested = False 
     
     # prompt = "pick up the industrial components B"
     current_target = None
@@ -696,6 +1030,7 @@ def main():
         while True:
             episode += 1
             print(f"\n=== Episode {episode} ===")
+            
             # 1. 获取下一个目标点
             target_pose, idx, total = sampler.get_next_target()
             # 如果没有点了，结束程序
@@ -704,6 +1039,8 @@ def main():
                 print("ALL TEST POINTS COMPLETED!")
                 print(f"Result image saved at: {viz.save_path}")
                 print("="*50)
+                # 可选：测试完成后删除进度文件，方便下次重来
+                # if os.path.exists(PROGRESS_FILE): os.remove(PROGRESS_FILE)
                 break
             print(f"\n=== Test Point {idx}/{total} ===")
             print(f"Target: {target_pose}")
@@ -717,9 +1054,15 @@ def main():
             
             # 【新增位置】在这里获取本回合的起始基准点
             start_pose_abs = robot.get_current_cartesian()
+            
+            # 开始记录：传入 起始点 和 理论目标点
+            recorder.start_episode(start_pose_abs, target_pose)
+            
             robot.arm.set_mode(1)
             robot.arm.set_state(0)
             time.sleep(0.5) # 等待模式切换生效
+            #   初始化标志位
+            just_recovered = False 
             
             # 【删除了】原先这里的 policy.infer 和 robot.move_to_start
             # 原因：模型输出的是相对增量，不能直接用于 move_to_start 的绝对位置控制
@@ -727,20 +1070,65 @@ def main():
             # 4. AI 控制循环
             print(">>> AI Loop running... Press 'o' to ABORT (Mark as Fail).")
             aborted = False
+            # 第1次运行需要编译模型(JIT)，给 120秒，后续给 27秒
+            current_timeout_limit = 120.0 if episode == 1 else 27.0
+            # 计时器初始化
+            episode_start_time = time.time()
+            consecutive_re_inference_count = 0
+            MAX_RETRY = 10 # 增加重试次数，因为现在有回拉机制，更容易救回来
+            close_gripper_time = time.time()
             
+            if robot.arm.mode != 1:
+                print(">>> robot.arm.mode != 1 , enter recover_from_error()")
+                robot.recover_from_error(target_mode=1)
             while True:
+                # 【新增】重置本轮开始时间
                 #  极速检查退出，不要用 select 阻塞
                 if kb.get_and_clear_key() == 'o':
                     aborted = True; break
+                elif kb.get_and_clear_key() == 'p':
+                    if not pause_requested:
+                        print("\n>>> ⏳ [指令收到] 本轮结束后将暂停...")
+                        pause_requested = True
+                elif kb.get_and_clear_key() == 'y':
+                    print("\n>>> 🎯 [指令收到] 手动触发抓取 (Mark as Success).")
+                    # 立即闭合夹爪 (模拟模型输出了闭合)
+                    robot.close_gripper()
+                    time.sleep(0.5) # 给一点时间闭合
+                    # 标记为成功退出 (不设aborted)
+                    # 记录夹爪闭合时间 (用于计算耗时)
+                    close_gripper_time = time.time()
+                    # 跳出推理循环，直接进结算
+                    break 
                 
                 # 1. 观测 (Code A: get_observation)
                 raw_obs = robot.get_observation()
-                
+                # =================================================================
+                # 【DEBUG】如果是回拉后刚回来的第一帧，立刻保存，看看到底喂给了模型什么
+                # =================================================================
+                if just_recovered:
+                    debug_rec_dir = os.path.join(VIS_SAVE_DIR, "debug_recovery_check")
+                    os.makedirs(debug_rec_dir, exist_ok=True)
+                    timestamp = int(time.time() * 1000)
+                    save_path = os.path.join(debug_rec_dir, f"recovery_input_{timestamp}.jpg")
+                    
+                    print(f"\n[DEBUG CHECK] 正在保存回拉后的首帧推理图像: {save_path}")
+                    if 'cam_left_wrist' in raw_obs:
+                        # 注意：raw_obs 是 RGB，保存需转 BGR
+                        cv2.imwrite(save_path, cv2.cvtColor(raw_obs['cam_left_wrist'], cv2.COLOR_RGB2BGR))
+                    
+                    # 存完后重置标志位，只存这一张
+                    just_recovered = False
+                # =================================================================
                 curr_pose_abs = robot.get_current_cartesian() # 当前绝对坐标
                 
                 # 构造相对输入 State
                 # State = 当前绝对 - 起始绝对
+                def normalize_angle(angle):
+                    # 将角度映射到 -pi 到 pi
+                    return (angle + np.pi) % (2 * np.pi) - np.pi
                 rel_pose = curr_pose_abs - start_pose_abs
+                rel_pose[5] = normalize_angle(curr_pose_abs[5] - start_pose_abs[5])
                 print(f"\r[State] Rel_pose: {rel_pose[:3]}", end="") 
                 
                 # 拼装 (7维)
@@ -760,6 +1148,7 @@ def main():
                 
                 # 3. 抓取检测
                 if np.any(action_chunk[:1, 6] > 0.8):
+                    close_gripper_time = time.time() # 【关键】自动抓取也要记录时间
                     print(">>> Auto Grasp Detected.")
                     break
                 
@@ -779,7 +1168,14 @@ def main():
                 #     elapsed = time.time() - step_start
                 #     sleep_time = (1.0 / CONTROL_FREQ) - elapsed
                 #     if sleep_time > 0: time.sleep(sleep_time)
+                need_re_inference = False
                 for i in range(steps_to_run):
+                    current_duration = time.time() - episode_start_time
+                    if current_duration > episode_start_time:
+                        print(f"\n[Timeout] 耗时 {current_duration:.1f}s > 27s. 强制中断 Chunk，重新推理...")
+                        aborted = True
+                        break # 跳出 for 循环 -> 进入下一次 while True (重新拍照推理)
+
                     raw_action = action_chunk[i]
                     
                     # 【修改逻辑】：如果模型输出的是 "相对于Start的位置"
@@ -789,6 +1185,106 @@ def main():
                     # 预测的目标绝对位置
                     pred_target_abs = start_pose_abs[:6] + raw_action[:6]
                     
+                    # 转换成 mm 进行检测
+                    # =======================================================
+                    pred_target_mm = pred_target_abs * 1000.0
+                    
+                    # 使用宽松边界 (EXPANDED) 进行检查
+                    if not robot.is_in_boundary(pred_target_mm, BOUNDARY_EXPANDED):
+                        print(f"\n[Safety] 目标 ({pred_target_mm[0]:.0f}, {pred_target_mm[1]:.0f}) 超出宽松边界！正在回拉...")
+                        # =======================================================
+                        # 【DEBUG 新增】: 保存当前帧及后续缓冲帧，验证是否有延迟
+                        # =======================================================
+                        debug_dir = os.path.join(VIS_SAVE_DIR, "debug_pullback")
+                        os.makedirs(debug_dir, exist_ok=True)
+                        timestamp = int(time.time() * 1000)
+                        
+                        print(f"[Debug] 正在保存异常时刻图像到: {debug_dir}")
+                        # 1. 保存导致这次错误推理的“案发现场”图片 (raw_obs)
+                        # 注意：raw_obs 是 RGB，OpenCV 保存需要转 BGR
+                        if 'cam_left_wrist' in raw_obs:
+                            cv2.imwrite(
+                                os.path.join(debug_dir, f"{timestamp}_00_inference_input.jpg"), 
+                                cv2.cvtColor(raw_obs['cam_left_wrist'], cv2.COLOR_RGB2BGR)
+                            )
+                        
+                        # 2. 连续读取并保存接下来的 5 帧，看看缓冲区里是什么
+                        # 如果这 5 张图变化巨大，或者第 1 张和第 5 张位置差异很大，说明缓冲区有严重积压
+                        for i in range(1, 6):
+                            temp_obs = robot.get_observation() # 这里面包含了一次 read()
+                            if 'cam_left_wrist' in temp_obs:
+                                cv2.imwrite(
+                                    os.path.join(debug_dir, f"{timestamp}_{i:02d}_buffer_flush.jpg"), 
+                                    cv2.cvtColor(temp_obs['cam_left_wrist'], cv2.COLOR_RGB2BGR)
+                                )
+                            # 稍微 sleep 一点点，模拟处理时间，或者全速读以测试纯 I/O 堆积
+                            time.sleep(0.01) 
+                        # =======================================================
+                        
+                        # --- 计算回拉向量 ---
+                        # 策略：向区域中心点回拉
+                        center_pt = np.mean(BOUNDARY_POINTS_2D, axis=0) # 原始严格边界的中心
+                        curr_xy = pred_target_mm[:2]
+                        
+                        # 计算方向向量: Current -> Center
+                        vec_to_center = center_pt - curr_xy
+                        norm = np.linalg.norm(vec_to_center)
+                        
+                        if norm > 0:
+                            # 归一化并乘以回拉距离 (例如 50mm)
+                            # pull_back_vec = (vec_to_center / norm) * 50.0
+                            pull_back_vec = (vec_to_center / norm) * 50.0
+                        else:
+                            pull_back_vec = np.array([10.0, 10.0]) # 异常保护
+                            
+                        # --- 执行回拉动作 ---
+                        # 获取当前位置
+                        curr_pose_recover = robot.get_current_cartesian()
+                        # 目标位置 = 当前位置 + 回拉向量 (注意单位换算 mm -> m)
+                        target_pose_recover = curr_pose_recover.copy()
+                        target_pose_recover[0] += pull_back_vec[0] / 1000.0
+                        target_pose_recover[1] += pull_back_vec[1] / 1000.0
+                        # Z轴保持不变或稍微抬高一点点防止拖拽
+                        # target_pose_recover[2] += 0.01 
+                        
+                        # 计算 Delta 并执行
+                        delta_recover = target_pose_recover - curr_pose_recover
+                        # 拼装 Action (夹爪保持当前状态)
+                        action_recover = np.append(delta_recover[:6], robot.current_gripper_state)
+                        
+                        print(f"[Recovery] 执行回拉动作: dX={pull_back_vec[0]:.1f}mm, dY={pull_back_vec[1]:.1f}mm")
+                        robot.execute_action(action_recover)
+                        # =======================================================
+                        # 回拉后：清理相机缓存 + 原地停留 2 秒，再开始下一次推理
+                        # 目的：尽量模拟 episode 开始时的 "flush + 稳定一下" 的观测条件
+                        # =======================================================
+                        try:
+                            print("[Recovery] 回拉完成：清理相机缓存，并原地等待 2 秒后重新推理...")
+                            robot.flush_cameras()
+                            time.sleep(2.0)
+                            robot.flush_cameras()
+                        except Exception as e:
+                            print(f"[Recovery] 相机 flush/等待过程中出现异常（忽略继续）：{e}")
+                        
+                        # =======================================================
+                        # 【关键修复】回拉后重置 start_pose_abs 为当前回拉后的位置
+                        # 原因：模型输出的 action 是"相对 start_pose_abs 的目标位置"
+                        # 如果回拉后不重置，坐标系会错乱，导致朝错误方向运动
+                        # =======================================================
+                        new_start_pose = robot.get_current_cartesian()
+                        if new_start_pose is not None:
+                            print(f"[Recovery] 重置 episode 起点：从 {np.round(start_pose_abs[:3]*1000, 1)} 更新为 {np.round(new_start_pose[:3]*1000, 1)} (mm)")
+                            start_pose_abs = new_start_pose
+                        else:
+                            print("[Recovery] ⚠️ 警告：无法获取回拉后位置，start_pose_abs 未更新")
+                        
+                        # 强制触发重推理
+                        need_re_inference = True
+                        # 标记：刚才发生了回拉，下一次循环开头要查图
+                        just_recovered = True 
+                        break 
+                    # =======================================================
+                
                     # 当前绝对位置
                     curr_pose_abs = robot.get_current_cartesian()
                     
@@ -798,27 +1294,183 @@ def main():
                     # 拼装夹爪
                     action_to_execute = np.append(real_delta, raw_action[6])
                     
-                    robot.execute_action(action_to_execute) # execute_action 内部会限幅
+                    success = robot.execute_action(action_to_execute) # execute_action 内部会限幅
+                    if not success:
+                        print("\n[Safety] 动作执行失败 (关节跳变/IK)。启动【主动恢复】策略...")
+                        
+                        # --- 1. 计算恢复向量 (向中心回拉 + 向上抬起) ---
+                        # 获取当前位置 (米)
+                        curr_pose_m = robot.get_current_cartesian()
+                        curr_xy_mm = curr_pose_m[:2] * 1000.0
+                        
+                        # 计算中心点 (mm)
+                        center_pt = np.mean(BOUNDARY_POINTS_2D, axis=0)
+                        
+                        # 计算指向中心的方向
+                        vec_to_center = center_pt - curr_xy_mm
+                        dist_to_center = np.linalg.norm(vec_to_center)
+                        
+                        # 构造恢复动作 Delta (单位: 米)
+                        # 格式: [dx, dy, dz, dr, dp, dy, gripper]
+                        recovery_delta = np.zeros(7)
+                        
+                        # A. XY平面的回拉 (回拉 30mm)
+                        if dist_to_center > 0:
+                            direction = vec_to_center / dist_to_center
+                            # 往中心拉 0.03米
+                            recovery_delta[0] = direction[0] * 0.03 
+                            recovery_delta[1] = direction[1] * 0.03
+                        
+                        # B. Z轴的抬升 (抬起 20mm) - 这一步对解决关节跳变非常有效
+                        recovery_delta[2] = 0.02 
+                        
+                        # C. 保持夹爪状态不变
+                        recovery_delta[6] = robot.current_gripper_state
+                        
+                        print(f"[Recovery] 执行避险动作: 向中心回拉 3cm, 向上抬起 2cm...")
+                        
+                        # --- 2. 执行恢复动作 ---
+                        # 再次调用 execute_action 执行这个人工生成的动作
+                        # 如果这次还失败，那就没办法了，只能交给外层的 MAX_RETRY 去处理
+                        rec_success = robot.execute_action(recovery_delta)
+                        
+                        if rec_success:
+                            print("[Recovery] 避险动作执行成功。重新开始推理。")
+                            # =======================================================
+                            # 【关键修复】避险动作后也重置 start_pose_abs
+                            # 原因：机械臂位置已改变，需要更新坐标系原点
+                            # =======================================================
+                            new_start_pose = robot.get_current_cartesian()
+                            if new_start_pose is not None:
+                                print(f"[Recovery] 重置 episode 起点：从 {start_pose_abs[:3]*1000:.1f} 更新为 {new_start_pose[:3]*1000:.1f} (mm)")
+                                start_pose_abs = new_start_pose
+                        else:
+                            print("[Recovery] 避险动作也失败了 (可能卡死)。")
+                        
+                        # 无论避险是否成功，都必须中断当前 Chunk，重新拍照推理
+                        need_re_inference = True
+                        break
+                    else:
+                        close_gripper_time = time.time()
+                
+                    key = kb.get_and_clear_key()
+                    if key == 'o': 
+                        aborted = True
+                        break
+                    elif key == 'p':
+                        if not pause_requested:
+                            print("\n>>> ⏳ [指令收到] 本轮结束后将暂停...")
+                            pause_requested = True
+                    elif key == 'y':
+                        print("\n>>> 🎯 [指令收到] 手动触发抓取 (Mark as Success).")
+                        robot.close_gripper()
+                        close_gripper_time = time.time()
+                        aborted = False
+                        # 这里需要双重 break，先设置标志位
+                        break 
+                    # 记录每一步的实际位置
+                    # 确保 execute_action 之后机械臂已经动了
+                    curr_pos_abs = robot.get_current_cartesian()
+                    recorder.step(curr_pos_abs)
                 
                 if aborted: break
+                if key == 'y':
+                    break
+                # 如果是因为触发了上述三个保护机制而 break 的
+                if need_re_inference:
+                    consecutive_re_inference_count += 1
+                    if consecutive_re_inference_count >= MAX_RETRY:
+                        print(f"\n[Failure] 连续 {MAX_RETRY} 次重推理/回拉无效。判定失败。")
+                        aborted = True
+                        break
+                    continue
+                else:
+                    consecutive_re_inference_count = 0
             
             # 5. 结算环节
             if aborted:
                 print("\n>>> Inference Aborted by 'o'. Marking as FAILURE.")
                 viz.update_result(target_pose, False) # 记为失败
                 robot.open_gripper()
-                time.sleep(1.5)
-                robot.move_home_scripted()
+                target_up = list(target_pose); target_up[2] += 100
+                robot.arm.set_mode(0); robot.arm.set_state(0)
+                robot.arm.set_position(*target_up, speed=300, wait=True, is_radian=True)
+                target_pose_withObjetcZ = list(target_pose);target_up[2] = OBJECT_Z
+                robot.arm.set_position(*target_pose_withObjetcZ, speed=300, wait=True, is_radian=True)
+                robot.close_gripper(); time.sleep(2.0)
+                robot.arm.set_position(*target_up, speed=300, wait=True, is_radian=True)
+                
+                current_metrics = recorder.end_episode(success=False, close_gripper_time = close_gripper_time)
+                robot.arm.set_position(*HOME_POS, speed=300, wait=True, is_radian=True)
+
             else:
                 # 正常结束，等待人工判定
                 robot.close_gripper()
                 time.sleep(2.0)
+                current_metrics = recorder.end_episode(success=True, close_gripper_time = close_gripper_time)
                 robot.move_home_scripted()
                 print(">>> Marked as SUCCESS.")
                 viz.update_result(target_pose, True)
+                
+                print("\n>>> Evaluate Result: [y] Success / [n] Failure")
+                # 循环等待直到按下 y 或 n
+                # while True:
+                #     k = kb.get_and_clear_key()
+                    
+                #     if k == 'y': 
+                #         print(">>> Marked as SUCCESS.")
+                #         current_metrics = recorder.end_episode(success=True, close_gripper_time = close_gripper_time)
+                #         robot.arm.set_mode(0)
+                #         robot.arm.set_state(0)
+                #         time.sleep(0.1) # 等待固件切换完成
+                #         target_up = list(target_pose); target_up[2] += 100
+                #         robot.arm.set_position(*target_up, speed=100, wait=True, is_radian=True)
+                #         robot.move_home_scripted()
+                #         viz.update_result(target_pose, True)
+                #         break
+                #     elif k == 'n': 
+                #         print(">>> Marked as FAILURE.")
+                #         current_metrics = recorder.end_episode(success=False, close_gripper_time = close_gripper_time)
+                #         robot.arm.set_mode(0)
+                #         robot.arm.set_state(0)
+                #         time.sleep(0.1) # 等待固件切换完成
+                #         robot.open_gripper(); time.sleep(1.0)
+                #         target_up = list(target_pose); target_up[2] += 100
+
+                #         robot.arm.set_position(*target_up, speed=300, wait=True, is_radian=True)
+                #         robot.arm.set_position(*target_pose, speed=300, wait=True, is_radian=True)
+                #         robot.close_gripper(); time.sleep(2.0)
+                #         robot.arm.set_position(*target_up, speed=300, wait=True, is_radian=True)
+                
+                #         robot.arm.set_position(*target_up, speed=100, wait=True, is_radian=True)
+                #         robot.move_home_scripted()
+                #         viz.update_result(target_pose, False)
+                #         break
+                #     time.sleep(0.05)
+            
+            # 【新增】关键步骤：测试结束（无论成功失败），标记为完成并保存进度
+            sampler.mark_current_done()   
+            recorder.print_current_metrics(current_metrics)
+            recorder.print_summary()
+            
+            if pause_requested:
+                print("\n" + "="*50)
+                print(">>> ⏸️  程序已暂停 (用户请求)。")
+                print(">>> ⌨️  请按 [ENTER] 键继续下一轮测试...")
+                print("="*50)
+                
+                # 循环等待回车
+                while True:
+                    k = kb.get_and_clear_key()
+                    if k == '\n' or k == '\r': # 回车键
+                        print(">>> ▶️  继续运行...")
+                        pause_requested = False # 重置标志位
+                        break
+                    time.sleep(0.1)
 
     except KeyboardInterrupt:
         print("Stopped.")
+        recorder.print_summary()
     finally:
         kb.stop()
         robot.close()

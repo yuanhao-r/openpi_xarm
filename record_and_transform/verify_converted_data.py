@@ -64,7 +64,7 @@ import json
 import numpy as np
 
 # ================= 配置区域 =================
-DATASET_PATH = "/home/openpi/data/data_converted/exp20_lerobot_autoPut_data_0114night_224_224/xarm_autoPut_pi05_dataset"
+DATASET_PATH = "/home/openpi/data/data_converted/exp1_lerobot_autoPut_data_0128night_224_224/xarm_autoPut_pi05_dataset"
 TARGET_EPISODE_IDX = 0
 # ===========================================
 

@@ -49,10 +49,10 @@ class AutoDataRecorder:
 
         # ===================== 2D凸包区域定义 =====================
         self.boundary_points_2d = np.array([
-            [528.6, 13.5],
-            [780.6, 181.2],
-            [606.9, 502.4],
-            [364.1,370.0],
+            [528.6, 126.5],
+            [745.0, 250.2],
+            [501.9, 539.4],
+            [338.1, 425.0],
         ])
         scale_factor = 0.8  # 缩放比例，0.8 表示缩小到boundary_points_2d的 80%，根据需求调整
         center_point = np.mean(self.boundary_points_2d, axis=0)
@@ -676,7 +676,7 @@ class AutoDataRecorder:
                         
                         print(f"  [Perturb] 沿Yaw轴冲过头: dist={overshoot_dist:.1f}mm, Yaw={np.degrees(target_yaw):.1f}°")
                         print(perturb_pos)
-                        if random.random() < 0.8:
+                        if random.random() < 0.3:
                             yaw_error_deg = random.uniform(0, 45)
                             if random.random() < 0.5: yaw_error_deg *= -1
                             perturb_pos[5] += np.radians(yaw_error_deg)
@@ -721,7 +721,7 @@ class AutoDataRecorder:
                         perturb_pos[2] += 45.0 
                         print(perturb_pos)
                         
-                        if random.random() < 0.8:
+                        if random.random() < 0.3:
                             yaw_error_deg = random.uniform(20, 45)
                             if random.random() < 0.5: yaw_error_deg *= -1
                             perturb_pos[5] += np.radians(yaw_error_deg)
@@ -776,8 +776,8 @@ class AutoDataRecorder:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--ip", type=str, default="192.168.1.232", help="xArm IP")
-    # parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/exp21_data_auto_queue_PutAndRecord_0115/raw", help="Output directory")
-    parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/test/raw", help="Output directory")
+    parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/exp21_data_auto_queue_PutAndRecord_0115/raw", help="Output directory")
+    # parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/test/raw", help="Output directory")
     args = parser.parse_args()
     
     # cameras = {

@@ -377,7 +377,7 @@ def incremental_convert(raw_dir, repo_id, output_dir):
                 
                 # 2. 检查图像目录是否存在且写入完成
                 # cam_dir = d / "images" / "cam_high"
-                cam_dir = d / "images" / "cam_left_wrist"
+                cam_dir = d / "images" / "cam_right_wrist"
                 if not cam_dir.exists():
                     continue
                 # 取最后一张图像的修改时间（验证写入完成）
@@ -452,7 +452,8 @@ def verify_converted_data(output_dir, repo_id):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--raw-dir", type=str, 
-                        default="/home/openpi/data/data_raw/exp21_data_auto_queue_PutAndRecord_0115/raw", 
+                        # default="/home/openpi/data/data_raw/exp21_data_auto_queue_PutAndRecord_0115/raw", 
+                        default="/home/openpi/data/data_raw/exp1_data_auto_queue_PutAndRecord_0128/raw",
                         help="原始数据目录")
     # parser.add_argument("--raw-dir", type=str, 
     #                     default="/home/openpi/data/data_raw/test/raw", 
@@ -461,7 +462,8 @@ if __name__ == "__main__":
                         default="xarm_autoPut_pi05_dataset", 
                         help="数据集名称")
     parser.add_argument("--output-dir", type=str, 
-                        default="/home/openpi/data/data_converted/exp22_lerobot_autoPut_data_0116night_224_224", 
+                        # default="/home/openpi/data/data_converted/exp23_lerobot_autoPut_data_0123night_224_224", 
+                        default="/home/openpi/data/data_converted/exp1_lerobot_autoPut_data_0128night_224_224", 
                         help="输出目录")
     parser.add_argument("--scan-interval", type=int, default=5, 
                         help="扫描新增episode的间隔（秒）")

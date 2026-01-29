@@ -42,17 +42,17 @@ class AutoDataRecorder:
 
         # --- 关键位姿定义 (单位: 毫米/弧度) ---
         self.pos_home = [486.626923, 158.343277, 30.431152, 3.12897, 0.012689, -1.01436]
-        self.pos_A = [486.626923, 158.343277, -69.431152, 3.12897, 0.012689, -1.01436]
+        self.pos_A = [486.626923, 158.343277, -85.431152, 3.12897, 0.012689, -1.01436]
         # self.instruction = "pick up the industrial components"
-        self.instruction =  "pick up the silver metal cylinder"
+        self.instruction =  "pick up the small upright valve"
         self.fixed_z = self.pos_A[2]  # Z轴固定为桌面高度
 
         # ===================== 2D凸包区域定义 =====================
         self.boundary_points_2d = np.array([
-            [528.6, 13.5],
-            [780.6, 181.2],
-            [606.9, 502.4],
-            [364.1,370.0],
+            [514.6, 125.5],
+            [706.6, 271.2],
+            [475.9, 552.4],
+            [337.1,448.0],
         ])
         scale_factor = 0.8  # 缩放比例，0.8 表示缩小到boundary_points_2d的 80%，根据需求调整
         center_point = np.mean(self.boundary_points_2d, axis=0)
@@ -102,7 +102,7 @@ class AutoDataRecorder:
         self.data_queue = queue.Queue(maxsize=50)
         
         # === 扰动参数 ===
-        self.perturbation_prob = 0.6  # 60% 的概率加入扰动（故意走偏再修正）
+        self.perturbation_prob = 0.3  # 60% 的概率加入扰动（故意走偏再修正）
         self.perturbation_range = 30.0 # 扰动范围 30mm (3cm)
        
     def get_random_start_pose(self):

@@ -52,11 +52,11 @@ def update_instructions(base_path, start_ep, end_ep, new_instruction):
 
 if __name__ == "__main__":
     # --- 配置参数 ---
-    RAW_DATA_PATH = "/home/openpi/data/data_raw/exp20_data_auto_queue_PutAndRecord_0114/raw"
+    RAW_DATA_PATH = "/home/openpi/data/data_raw/exp21_data_auto_queue_PutAndRecord_0115/raw"
     # RAW_DATA_PATH = "/home/openpi/record_and_transform/test"
-    START_EPISODE = 0     # 起始编号
-    END_EPISODE = 1017       # 结束编号（包含此编号）
-    NEW_TEXT = "pick up the small upright valve"
+    START_EPISODE = 5736     # 起始编号
+    END_EPISODE = 5810       # 结束编号（包含此编号）
+    NEW_TEXT = "pick up the flat triangular plate"
     # ----------------
 
     update_instructions(RAW_DATA_PATH, START_EPISODE, END_EPISODE, NEW_TEXT)

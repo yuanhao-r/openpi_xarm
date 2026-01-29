@@ -13,17 +13,17 @@ SAVE_DIR = "/home/openpi/examples/xarm_real/images"
 JSON_FILENAME = "test_points.json"
 IMG_FILENAME = "test_points_map.png"
 
-# 边界定义
+# 边界定义 (四个角点)
 BOUNDARY_POINTS_2D = np.array([
-    [528.6, 13.5],
-    [780.6, 181.2],
-    [606.9, 502.4],
-    [364.1,370.0],
+    [528.6, 126.5],
+    [745.0, 250.2],
+    [501.9, 539.4],
+    [338.1, 425.0],
 ])
 
-# 固定高度和姿态 (与推理代码一致)
-HOME_POS = [486.626923, 158.343277] 
-FIXED_Z = -69.568863 # POS_A[2]
+# 固定高度和姿态
+HOME_POS = [486.626923, 297.343277] 
+FIXED_Z = -69.568863 
 FIXED_ROLL = 3.12897
 FIXED_PITCH = 0.012689
 BASE_YAW = -1.01436
@@ -34,17 +34,31 @@ YAW_RANDOM_RANGE = (-np.pi/6, np.pi/6)
 # -----------------------------------------------------------------------------
 class PointGenerator:
     def __init__(self):
-        self.hull = ConvexHull(BOUNDARY_POINTS_2D)
-        self.min_x = np.min(BOUNDARY_POINTS_2D[:, 0])
-        self.max_x = np.max(BOUNDARY_POINTS_2D[:, 0])
-        self.min_y = np.min(BOUNDARY_POINTS_2D[:, 1])
-        self.max_y = np.max(BOUNDARY_POINTS_2D[:, 1])
+        self.original_v = BOUNDARY_POINTS_2D 
+        center = np.mean(self.original_v, axis=0)
+        # 定义缩放因子 (2/3 ≈ 0.666)
+        scale_factor = 2.0 / 3.0
+        # 计算收缩后的顶点 V_shrunk
+        # 公式：P_new = Center + (P_old - Center) * scale
+        self.v = center + (self.original_v - center) * scale_factor
+        self.hull = ConvexHull(self.original_v)
+        
+        # 重新定义可视化需要的边界属性
+        # 可视化边界属性 (用原始边界画框，保证图的大小不变)
+        self.min_x = np.min(self.original_v[:, 0])
+        self.max_x = np.max(self.original_v[:, 0])
+        self.min_y = np.min(self.original_v[:, 1])
+        self.max_y = np.max(self.original_v[:, 1])
+        
         self.grid_rows, self.grid_cols = 4, 4
         
+        # 生成边界路径点
+        # 如果你希望边界测试点也收缩，就用 self.v
+        # 如果你希望边界测试点保持在最边缘，就用 self.original_v
         ccw_indices = self.hull.vertices
-        self.ccw_vertices = BOUNDARY_POINTS_2D[ccw_indices]
+        self.ccw_vertices = self.v[ccw_indices]
         self.path_points_2d = self._generate_boundary_path(self.ccw_vertices, 20.0)
-
+        
     def _generate_boundary_path(self, vertices, step_size):
         path = []
         num_v = len(vertices)
@@ -58,17 +72,26 @@ class PointGenerator:
             for s in range(steps):
                 path.append(p_curr + unit_vec * (s * step_size))
         return np.array(path)
+    
+    def get_bilinear_point(self, u, v):
+        """双线性插值：将单位正方形映射到四个角点定义的四边形"""
+        p0, p1, p2, p3 = self.v[0], self.v[1], self.v[2], self.v[3]
+        res = (1 - u) * (1 - v) * p0 + \
+              u * (1 - v) * p1 + \
+              u * v * p2 + \
+              (1 - u) * v * p3
+        return res
 
     def is_inside(self, x, y):
         return all(np.dot(eq, [x, y, 1]) <= 1e-6 for eq in self.hull.equations)
-
+    
 # -----------------------------------------------------------------------------
 # 可视化与保存逻辑
 # -----------------------------------------------------------------------------
 def main():
     gen = PointGenerator()
     
-    # 准备画布
+    # 准备画布参数
     scale = 1.5
     pad = 100
     offset_x = -gen.min_x * scale + 50
@@ -81,94 +104,73 @@ def main():
     h = int((gen.max_y - gen.min_y) * scale + pad)
     img = np.ones((h, w, 3), dtype=np.uint8) * 255
     
-    # 画边界和 Home
+    # 画边界和 Home 点
     pts = np.array([to_pixel(p[0], p[1]) for p in BOUNDARY_POINTS_2D], np.int32).reshape((-1, 1, 2))
     cv2.polylines(img, [pts], True, (0, 0, 0), 2)
     hx, hy = to_pixel(HOME_POS[0], HOME_POS[1])
     cv2.circle(img, (hx, hy), 8, (255, 0, 0), -1)
 
-    # 数据列表
-    saved_points = {
-        "grid": [],
-        "boundary": []
-    }
+    saved_points = {"grid": [], "boundary": []}
 
-    # 1. 生成网格点 (16个区域 * 2个点)
-    step_x = (gen.max_x - gen.min_x) / gen.grid_cols
-    step_y = (gen.max_y - gen.min_y) / gen.grid_rows
-
-    print("Generating Grid Points...")
+    # 1. 执行双线性网格采样 (严格按照四角点划分 4x4)
+    print("Generating Quadrilateral Grid Points...")
     for r in range(gen.grid_rows):
         for c in range(gen.grid_cols):
-            # 定义格子范围
-            c_min_x = gen.min_x + c * step_x
-            c_max_x = gen.min_x + (c + 1) * step_x
-            c_min_y = gen.min_y + r * step_y
-            c_max_y = gen.min_y + (r + 1) * step_y
+            u_min, u_max = c / gen.grid_cols, (c + 1) / gen.grid_cols
+            v_min, v_max = r / gen.grid_rows, (r + 1) / gen.grid_rows
             
-            # 画网格线 (灰色)
-            u1, v1 = to_pixel(c_min_x, c_min_y)
-            u2, v2 = to_pixel(c_max_x, c_max_y)
-            cv2.rectangle(img, (u1, v1), (u2, v2), (240, 240, 240), 1)
+            # 绘制网格线
+            grid_corners = [
+                gen.get_bilinear_point(u_min, v_min),
+                gen.get_bilinear_point(u_max, v_min),
+                gen.get_bilinear_point(u_max, v_max),
+                gen.get_bilinear_point(u_min, v_max)
+            ]
+            px_corners = [to_pixel(p[0], p[1]) for p in grid_corners]
+            cv2.polylines(img, [np.array(px_corners, np.int32)], True, (230, 230, 230), 1)
 
-            # 每个格子取 2 个点
+            # 每个格子采样 2 个点
             count = 0
-            for _ in range(50): # 尝试多次
-                if count >= 2: break
-                tx = random.uniform(c_min_x, c_max_x)
-                ty = random.uniform(c_min_y, c_max_y)
+            for _ in range(100):
+                if count >= 1: break
+                u_rand = random.uniform(u_min, u_max)
+                v_rand = random.uniform(v_min, v_max)
+                
+                target_pt = gen.get_bilinear_point(u_rand, v_rand)
+                tx, ty = target_pt[0], target_pt[1]
                 
                 if gen.is_inside(tx, ty):
                     yaw = BASE_YAW + random.uniform(*YAW_RANDOM_RANGE)
+                    saved_points["grid"].append([tx, ty, FIXED_Z, FIXED_ROLL, FIXED_PITCH, yaw])
                     
-                    # 保存数据
-                    pose = [tx, ty, FIXED_Z, FIXED_ROLL, FIXED_PITCH, yaw]
-                    saved_points["grid"].append(pose)
-                    
-                    # 画图 (紫色箭头)
                     px, py = to_pixel(tx, ty)
                     end_x = int(px + 20 * np.cos(yaw))
                     end_y = int(py + 20 * np.sin(yaw))
                     cv2.circle(img, (px, py), 4, (255, 0, 255), -1)
-                    cv2.arrowedLine(img, (px, py), (end_x, end_y), (255, 0, 255), 2, tipLength=0.3)
-                    
+                    cv2.arrowedLine(img, (px, py), (end_x, end_y), (255, 0, 255), 1, tipLength=0.3)
                     count += 1
     
-    # 2. 生成边界点 (均匀 10 个)
+    # 2. 生成边界采样点
     print("Generating Boundary Points...")
-    indices = np.linspace(0, len(gen.path_points_2d) - 1, 10, dtype=int)
+    indices = np.linspace(0, len(gen.path_points_2d) - 1, 5, dtype=int)
     for idx in indices:
         pt = gen.path_points_2d[idx]
         yaw = BASE_YAW + random.uniform(*YAW_RANDOM_RANGE)
+        saved_points["boundary"].append([pt[0], pt[1], FIXED_Z, FIXED_ROLL, FIXED_PITCH, yaw])
         
-        # 保存数据
-        pose = [pt[0], pt[1], FIXED_Z, FIXED_ROLL, FIXED_PITCH, yaw]
-        saved_points["boundary"].append(pose)
-        
-        # 画图
         px, py = to_pixel(pt[0], pt[1])
         end_x = int(px + 20 * np.cos(yaw))
         end_y = int(py + 20 * np.sin(yaw))
-        cv2.circle(img, (px, py), 4, (255, 0, 255), -1)
-        cv2.arrowedLine(img, (px, py), (end_x, end_y), (255, 0, 255), 2, tipLength=0.3)
+        cv2.circle(img, (px, py), 4, (0, 165, 255), -1) # 橙色标记边界点
+        cv2.arrowedLine(img, (px, py), (end_x, end_y), (0, 165, 255), 1, tipLength=0.3)
 
-    # 保存文件
-    if not os.path.exists(SAVE_DIR):
-        os.makedirs(SAVE_DIR)
-        
-    json_path = os.path.join(SAVE_DIR, JSON_FILENAME)
-    img_path = os.path.join(SAVE_DIR, IMG_FILENAME)
-    
-    with open(json_path, 'w') as f:
+    # 保存结果
+    if not os.path.exists(SAVE_DIR): os.makedirs(SAVE_DIR)
+    with open(os.path.join(SAVE_DIR, JSON_FILENAME), 'w') as f:
         json.dump(saved_points, f, indent=4)
-        
-    cv2.imwrite(img_path, img)
+    cv2.imwrite(os.path.join(SAVE_DIR, IMG_FILENAME), img)
     
-    print(f"Done!")
-    print(f"Points saved to: {json_path}")
-    print(f"Map image saved to: {img_path}")
-    print(f"Total Grid Points: {len(saved_points['grid'])}")
-    print(f"Total Boundary Points: {len(saved_points['boundary'])}")
+    print(f"Success! Map saved to {os.path.join(SAVE_DIR, IMG_FILENAME)}")
 
 if __name__ == "__main__":
     main()

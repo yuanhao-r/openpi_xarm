@@ -41,9 +41,10 @@ class AutoDataRecorder:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         # --- 关键位姿定义 (单位: 毫米/弧度) ---
-        self.pos_home = [539.120605, 17.047951, 100-69.568863, 3.12897, 0.012689, -1.01436]
-        self.pos_A = [539.120605, 17.047951, -69.568863, 3.12897, 0.012689, -1.01436]
+        self.pos_home = [554.626923, 361.343277, 30.431152, 3.12897, 0.012689, -1.01436]
+        self.pos_A = [554.626923, 361.343277, -65, 3.12897, 0.012689, -1.01436]
         self.fixed_z = self.pos_A[2]  # Z轴固定为桌面高度
+        self.instruction =  "pick up the flat triangular plate"
 
         # ===================== 2D凸包区域定义 =====================
         # self.boundary_points_2d = np.array([
@@ -59,10 +60,10 @@ class AutoDataRecorder:
         #     [428.805481, 203.618057],  # 左上
         # ])
         self.boundary_points_2d = np.array([
-            [528.6, 13.5],
-            [726.8, 154.8],
-            [626.9, 431.4],
-            [406.0, 306.3],
+            [528.6, 126.5],
+            [745.0, 250.2],
+            [501.9, 539.4],
+            [338.1, 425.0],
         ])
         
   
@@ -590,7 +591,7 @@ class AutoDataRecorder:
                 print(f"[Record] 开始录制 Episode {episode_idx}")
                 
                 time.sleep(1.0) # 确保机械臂完全静止，也确保相机画面稳定
-                self.start_recording(episode_idx, "pick up the industrial components C")
+                self.start_recording(episode_idx, self.instruction)
                 
                 # 抓取动作
                 self.move_to(safe_pos_up, speed=self.speed_record) 
@@ -604,7 +605,7 @@ class AutoDataRecorder:
                 # 4. [Return] 复位 (不录制)
                 print("[Return] 返回 Home")
                 self.move_to(safe_pos_up, speed=self.speed_fast)
-                self.move_to_joint_by_pose(self.pos_home, speed=self.speed_fast)
+                # self.move_to_joint_by_pose(self.pos_home, speed=self.speed_fast)
                 
                 episode_idx += 1
                 time.sleep(0.5)
@@ -620,18 +621,17 @@ class AutoDataRecorder:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--ip", type=str, default="192.168.1.232", help="xArm IP")
-    # parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/exp10_data_auto_queue_PutAndRecord_1229/raw", help="Output directory")
-    parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/test/raw", help="Output directory")
+    parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/exp21_data_auto_queue_PutAndRecord_0115/raw", help="Output directory")
+    # parser.add_argument("--output", type=str, default="/home/openpi/data/data_raw/test/raw", help="Output directory")
     args = parser.parse_args()
     
     cameras = {
-        "cam_high": 4,
-        "cam_left_wrist": 0,
-        "cam_right_wrist": 2
+        "cam_left_wrist": "/dev/cam_left_wrist",
+        "cam_right_wrist": "/dev/cam_right_wrist"
     }
     
     my_crop_configs = {
-        'cam_high': [61, 1, 434, 479], 
+        # 'cam_high': [61, 1, 434, 479], 
         'cam_left_wrist': [118, 60, 357, 420],
         'cam_right_wrist': [136, 57, 349, 412],
     }
